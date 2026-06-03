@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "react-native-blob-util": "^0.24.9",
+    "react-native-pdf": "^7.0.4"
+  }
+}
