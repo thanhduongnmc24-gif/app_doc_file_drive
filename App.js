@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Pdf from './PdfReader';
 
 const DEFAULT_API_KEY = 'AIzaSyB-WBOZfXXZgehcn-8TOXG-mlE7pxfqPk8';
-const DEFAULT_FOLDER_ID = '14Uouc776-GmsjpJCgw7SQ3sCN5KFKMCX';
+const DEFAULT_FOLDER_ID = '1qdFjsfepK500e395iMeyTB8zasDcZtHj';
 export default function App() {
   const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
   const [folderId, setFolderId] = useState(DEFAULT_FOLDER_ID);
@@ -283,7 +283,7 @@ export default function App() {
           )}
         />
         
-        {/* MODAL CÀI ĐẶT (Đã tích hợp Tăng/Giảm Cỡ chữ) */}
+        {/* MODAL CÀI ĐẶT */}
         <Modal visible={showSettings} animationType="slide" transparent={true}>
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
@@ -321,12 +321,14 @@ export default function App() {
     <SafeAreaView style={styles.container}>
       <View style={styles.contentArea}>
         
+        {/* LÒI CỐT: Ô TÀNG HÌNH BẤT TỬ - ĐÃ BỊ PHONG ẤN BÀN PHÍM ẢO */}
         <TextInput
           ref={hiddenInputRef}
           style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}
           autoFocus={true}
           showSoftInputOnFocus={false}
           caretHidden={true}
+          inputMode="none" 
           onBlur={() => hiddenInputRef.current?.focus()} 
           onKeyPress={handleKeyPress}
           value=""
@@ -385,7 +387,7 @@ export default function App() {
         </View>
       )}
 
-      {/* MODAL MỤC LỤC TRÀN VIỀN - SIÊU RỘNG */}
+      {/* MODAL MỤC LỤC TRÀN VIỀN */}
       <Modal visible={showToc} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { height: '90%', width: '98%', padding: 10 }]}>
