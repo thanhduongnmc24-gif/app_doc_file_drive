@@ -25,7 +25,7 @@ jobs:
       - name: Cài đặt Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Dọn rác và cài đặt bằng Yarn (Chống lỗi NPM)
+      - name: Dọn rác và cài đặt bằng Yarn
         run: |
           rm -rf node_modules package-lock.json
           npm install -g yarn
@@ -34,13 +34,15 @@ jobs:
       - name: Thực hiện Expo Prebuild
         run: npx expo prebuild --platform android --clean
 
-      - name: Biên dịch tạo file APK Release (Tiết kiệm RAM)
+      - name: Khóa cứng cấu hình chip thấp nhất (armeabi-v7a)
         run: |
           cd android
+          # Lệnh của Tèo: Ép hệ thống chỉ biên dịch đúng dòng chip v7a siêu nhẹ
+          sed -i '/defaultConfig {/a \        ndk { abiFilters "armeabi-v7a" }' app/build.gradle
           ./gradlew assembleRelease --no-daemon
 
-      - name: Đóng gói và upload file APK lên Artifacts
+      - name: Đóng gói và upload đúng 1 file APK duy nhất lên Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ung-Dung-Doc-Truyen-Cua-Anh-Hai
-          path: android/app/build/outputs/apk/release/app-release.apk
+          name: App-Doc-Truyen-Sieu-Nhe-Cua-Anh-Hai
+          path: android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk
