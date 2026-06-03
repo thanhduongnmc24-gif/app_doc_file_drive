@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, ActivityIndicator, SafeAreaView, Dimensions } from 'react-native';
-// Đổi nguồn lấy PDF sang file chim mồi anh em mình vừa tạo
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, ActivityIndicator, SafeAreaView, Dimensions, Platform, TextInput } from 'react-native';
 import Pdf from './PdfReader';
 
-const API_KEY = 'ae9a18d8b31ba55d7addbee882a1460e29964a5a'; 
-const FOLDER_ID = '1qdFjsfepK500e395iMeyTB8zasDcZtHj';
+const API_KEY = 'AIzaSyB-WBOZfXXZgehcn-8TOXG-mlE7pxfqPk8'; 
+const FOLDER_ID = '14Uouc776-GmsjpJCgw7SQ3sCN5KFKMCX';
 
 export default function App() {
   const [files, setFiles] = useState([]);
@@ -12,24 +11,39 @@ export default function App() {
   const [textContent, setTextContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadingContent, setLoadingContent] = useState(false);
+  const [jumpText, setJumpText] = useState('1'); // Lưu con số người dùng gõ vào
 
   const fetchFiles = async () => {
     try {
+      // Gọi API Drive, mặc định Google đã sort name nhưng mình sẽ sort lại cho chắc cốp
       const query = `'${FOLDER_ID}' in parents and (mimeType = 'text/plain' or mimeType = 'application/pdf') and trashed = false`;
       const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,mimeType)&orderBy=name&key=${API_KEY}`;
       
       const response = await fetch(url);
       const data = await response.json();
       
+      if (data.error) {
+        alert("Ê Google báo lỗi nè anh hai: " + data.error.message);
+        setLoading(false);
+        return;
+      }
+      
       if (data.files && data.files.length > 0) {
-        setFiles(data.files);
+        // Thuật toán sắp xếp A-Z siêu thông minh (Hiểu được số 10 lớn hơn số 2)
+        const sortedFiles = data.files.sort((a, b) => 
+          a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+        );
+
+        setFiles(sortedFiles);
         setCurrentIndex(0);
-        await loadContent(data.files[0]);
+        setJumpText('1');
+        await loadContent(sortedFiles[0]);
       } else {
+        alert("Lạ ghê, Google kêu không thấy file .txt hay .pdf nào trong thư mục này hết!");
         setLoading(false);
       }
     } catch (error) {
-      console.error("Lỗi lấy danh sách file từ Drive:", error);
+      alert("Lỗi rớt mạng hoặc sai cú pháp: " + error.message);
       setLoading(false);
     }
   };
@@ -57,10 +71,27 @@ export default function App() {
     fetchFiles();
   }, []);
 
+  // Xử lý khi anh hai gõ số và bấm nhảy trang
+  const handleJump = () => {
+    const num = parseInt(jumpText, 10);
+    if (!isNaN(num) && num >= 1 && num <= files.length) {
+      const newIdx = num - 1;
+      if (newIdx !== currentIndex) {
+        setCurrentIndex(newIdx);
+        loadContent(files[newIdx]);
+      }
+    } else {
+      alert(`Anh hai ơi, nhập số từ 1 đến ${files.length} thôi nha!`);
+      // Reset lại đúng số trang hiện tại nếu gõ bậy
+      setJumpText((currentIndex + 1).toString());
+    }
+  };
+
   const handleNext = async () => {
     if (currentIndex < files.length - 1) {
       const nextIdx = currentIndex + 1;
       setCurrentIndex(nextIdx);
+      setJumpText((nextIdx + 1).toString());
       await loadContent(files[nextIdx]);
     }
   };
@@ -69,6 +100,7 @@ export default function App() {
     if (currentIndex > 0) {
       const prevIdx = currentIndex - 1;
       setCurrentIndex(prevIdx);
+      setJumpText((prevIdx + 1).toString());
       await loadContent(files[prevIdx]);
     }
   };
@@ -102,7 +134,22 @@ export default function App() {
         <Text style={styles.btnText}>Trang trước</Text>
       </TouchableOpacity>
       
-      <Text style={styles.fileTitle} numberOfLines={1}>{currentFile.name}</Text>
+      <View style={styles.centerNav}>
+        <Text style={styles.fileTitle} numberOfLines={1}>{currentFile.name}</Text>
+        <View style={styles.jumpContainer}>
+          <Text style={styles.jumpLabel}>Tệp:</Text>
+          <TextInput 
+            style={styles.jumpInput}
+            keyboardType="numeric"
+            value={jumpText}
+            onChangeText={setJumpText}
+            onSubmitEditing={handleJump}
+            onBlur={handleJump}
+            returnKeyType="go"
+          />
+          <Text style={styles.jumpLabel}>/ {files.length}</Text>
+        </View>
+      </View>
       
       <TouchableOpacity 
         style={[styles.button, currentIndex === files.length - 1 && styles.disabledBtn]} 
@@ -143,10 +190,14 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#ffffff' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   navBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 10, backgroundColor: '#f8f9fa', borderBottomWidth: 1, borderTopWidth: 1, borderColor: '#dee2e6' },
-  button: { backgroundColor: '#007BFF', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 4 },
+  button: { backgroundColor: '#007BFF', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 4 },
   disabledBtn: { backgroundColor: '#6c757d' },
-  btnText: { color: '#fff', fontWeight: 'bold' },
-  fileTitle: { flex: 1, textAlign: 'center', marginHorizontal: 10, fontWeight: 'bold', color: '#212529' },
+  btnText: { color: '#fff', fontWeight: 'bold', fontSize: 12 },
+  centerNav: { flex: 1, alignItems: 'center', marginHorizontal: 10 },
+  fileTitle: { fontWeight: 'bold', color: '#212529', fontSize: 14 },
+  jumpContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  jumpLabel: { fontSize: 12, color: '#495057' },
+  jumpInput: { borderWidth: 1, borderColor: '#ced4da', borderRadius: 4, width: 45, height: 26, textAlign: 'center', marginHorizontal: 5, fontSize: 12, backgroundColor: '#fff', padding: 0 },
   contentArea: { flex: 1, backgroundColor: '#ffffff', justifyContent: 'center' },
   textContainer: { padding: 20 },
   textContent: { fontSize: 18, lineHeight: 28, color: '#212529', textAlign: 'justify' },
