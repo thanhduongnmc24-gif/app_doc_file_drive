@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, ActivityIndicator, SafeAreaView, Dimensions } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, ActivityIndicator, SafeAreaView, Dimensions, Platform } from 'react-native';
 import Pdf from 'react-native-pdf';
 
 // Điền thông tin API Key và Thư mục bí mật của anh hai vào đây nhé!
-const API_KEY = 'ae9a18d8b31ba55d7addbee882a1460e29964a5a';
+const API_KEY = 'ae9a18d8b31ba55d7addbee882a1460e29964a5a'; 
 const FOLDER_ID = '14Uouc776-GmsjpJCgw7SQ3sCN5KFKMCX';
 
 export default function App() {
@@ -128,11 +128,19 @@ export default function App() {
             <Text style={styles.textContent}>{textContent}</Text>
           </ScrollView>
         ) : (
-          <Pdf
-            source={{ uri: `https://www.googleapis.com/drive/v3/files/${currentFile.id}?alt=media&key=${API_KEY}` }}
-            style={styles.pdf}
-            onError={(error) => console.log("Lỗi render file PDF:", error)}
-          />
+          Platform.OS === 'web' ? (
+            <View style={styles.center}>
+              <Text style={{ textAlign: 'center', padding: 20 }}>
+                [Môi trường Web] Tạm ẩn PDF để test. Anh hai test thử file .txt và các nút lật trang nhé!
+              </Text>
+            </View>
+          ) : (
+            <Pdf
+              source={{ uri: `https://www.googleapis.com/drive/v3/files/${currentFile.id}?alt=media&key=${API_KEY}` }}
+              style={styles.pdf}
+              onError={(error) => console.log("Lỗi render file PDF:", error)}
+            />
+          )
         )}
       </View>
 
