@@ -3,7 +3,6 @@ import { StyleSheet, Text, View, ScrollView, TouchableOpacity, ActivityIndicator
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Pdf from './PdfReader';
 
-// Cấu hình gốc (Phòng hờ khi anh hai xóa trắng Cài đặt)
 const DEFAULT_API_KEY = 'AIzaSyB-WBOZfXXZgehcn-8TOXG-mlE7pxfqPk8';
 const DEFAULT_FOLDER_ID = '14Uouc776-GmsjpJCgw7SQ3sCN5KFKMCX';
 
@@ -17,6 +16,9 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [loadingContent, setLoadingContent] = useState(false);
   const [jumpText, setJumpText] = useState('1');
+  
+  // Trạng thái cho cỡ chữ
+  const [fontSize, setFontSize] = useState(18);
 
   // Trạng thái cho Modal Cài đặt
   const [showSettings, setShowSettings] = useState(false);
@@ -25,24 +27,26 @@ export default function App() {
 
   // Trạng thái cho Modal Mục lục
   const [showToc, setShowToc] = useState(false);
-  const [tocPage, setTocPage] = useState(0); // Bắt đầu từ trang 0 (chương 1-100)
+  const [tocPage, setTocPage] = useState(0); 
   const ITEMS_PER_PAGE = 100;
 
   useEffect(() => {
     loadSettings();
   }, []);
 
-  // Đọc cấu hình từ bộ nhớ điện thoại
   const loadSettings = async () => {
     try {
       const savedKey = await AsyncStorage.getItem('customApiKey');
       const savedFolder = await AsyncStorage.getItem('customFolderId');
+      const savedFontSize = await AsyncStorage.getItem('customFontSize');
       
       const activeKey = savedKey || DEFAULT_API_KEY;
       const activeFolder = savedFolder || DEFAULT_FOLDER_ID;
       
+      if (savedFontSize) setFontSize(parseInt(savedFontSize, 10));
       setApiKey(activeKey);
       setFolderId(activeFolder);
+      
       fetchFiles(activeKey, activeFolder);
     } catch (e) {
       fetchFiles(DEFAULT_API_KEY, DEFAULT_FOLDER_ID);
@@ -67,23 +71,52 @@ export default function App() {
     }
   };
 
+  // Hàm thay đổi và lưu cỡ chữ tức thì
+  const changeFontSize = async (delta) => {
+    const newSize = fontSize + delta;
+    if (newSize >= 12 && newSize <= 50) {
+      setFontSize(newSize);
+      try {
+        await AsyncStorage.setItem('customFontSize', newSize.toString());
+      } catch (e) {
+        console.log("Lỗi lưu cỡ chữ");
+      }
+    }
+  };
+
   const fetchFiles = async (currentKey, currentFolder) => {
     try {
-      const query = `'${currentFolder}' in parents and (mimeType = 'text/plain' or mimeType = 'application/pdf') and trashed = false`;
-      const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,mimeType)&orderBy=name&key=${currentKey}`;
+      let allFiles = [];
+      let pageToken = '';
       
-      const response = await fetch(url);
-      const data = await response.json();
-      
-      if (data.error) {
-        alert("Lỗi cấu hình Google: " + data.error.message);
-        setLoading(false);
-        return;
-      }
-      
-      if (data.files && data.files.length > 0) {
+      // Vòng lặp vét sạch sành sanh file từ Google Drive
+      do {
+        const query = `'${currentFolder}' in parents and (mimeType = 'text/plain' or mimeType = 'application/pdf') and trashed = false`;
+        let url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=nextPageToken,files(id,name,mimeType)&orderBy=name&key=${currentKey}&pageSize=1000`;
+        
+        if (pageToken) {
+          url += `&pageToken=${pageToken}`;
+        }
+        
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data.error) {
+          alert("Lỗi cấu hình Google: " + data.error.message);
+          setLoading(false);
+          return;
+        }
+        
+        if (data.files && data.files.length > 0) {
+          allFiles = allFiles.concat(data.files);
+        }
+        
+        pageToken = data.nextPageToken; // Nếu còn file, Google sẽ nhả ra token này để đi tiếp
+      } while (pageToken);
+
+      if (allFiles.length > 0) {
         // Thuật toán sắp xếp A-Z thông minh (nhận diện số)
-        const sortedFiles = data.files.sort((a, b) => 
+        const sortedFiles = allFiles.sort((a, b) => 
           a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
         );
 
@@ -121,7 +154,6 @@ export default function App() {
     setLoading(false);
   };
 
-  // Nút Đi cho ô nhập số trang
   const handleJump = () => {
     const num = parseInt(jumpText, 10);
     if (!isNaN(num) && num >= 1 && num <= files.length) {
@@ -160,7 +192,6 @@ export default function App() {
     setShowSettings(true);
   };
 
-  // Logic chia trang cho Mục lục
   const totalTocPages = Math.ceil(files.length / ITEMS_PER_PAGE);
   const currentTocList = files.slice(tocPage * ITEMS_PER_PAGE, (tocPage + 1) * ITEMS_PER_PAGE);
 
@@ -168,7 +199,7 @@ export default function App() {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#007BFF" />
-        <Text style={{ marginTop: 10, color: '#555' }}>Tèo đang kết nối kho sách...</Text>
+        <Text style={{ marginTop: 10, color: '#555' }}>Tèo đang vét sạch kho sách (có thể hơi lâu nếu nhiều file)...</Text>
       </View>
     );
   }
@@ -235,7 +266,10 @@ export default function App() {
           <ActivityIndicator size="large" color="#007BFF" />
         ) : currentFile.mimeType === 'text/plain' ? (
           <ScrollView style={styles.textContainer}>
-            <Text style={styles.textContent}>{textContent}</Text>
+            {/* Cỡ chữ được áp dụng động ở đây */}
+            <Text style={[styles.textContent, { fontSize: fontSize, lineHeight: fontSize * 1.5 }]}>
+              {textContent}
+            </Text>
           </ScrollView>
         ) : (
           <Pdf
@@ -252,8 +286,8 @@ export default function App() {
       <Modal visible={showSettings} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Cài đặt API & Thư mục</Text>
-            <Text style={styles.modalSub}>Để trống sẽ dùng cấu hình gốc của App.</Text>
+            <Text style={styles.modalTitle}>Cài đặt Ứng dụng</Text>
+            <Text style={styles.modalSub}>Để trống 2 ô dưới sẽ dùng cấu hình gốc.</Text>
             
             <TextInput
               style={styles.settingInput}
@@ -267,6 +301,20 @@ export default function App() {
               value={tempFolderId}
               onChangeText={setTempFolderId}
             />
+
+            {/* Khu vực điều chỉnh cỡ chữ */}
+            <View style={styles.fontAdjuster}>
+              <Text style={styles.fontLabel}>Cỡ chữ đọc truyện:</Text>
+              <View style={styles.fontControls}>
+                <TouchableOpacity style={styles.fontBtn} onPress={() => changeFontSize(-2)}>
+                  <Text style={styles.fontBtnText}>A-</Text>
+                </TouchableOpacity>
+                <Text style={styles.fontValue}>{fontSize}</Text>
+                <TouchableOpacity style={styles.fontBtn} onPress={() => changeFontSize(2)}>
+                  <Text style={styles.fontBtnText}>A+</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
             
             <View style={styles.modalActions}>
               <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#6c757d'}]} onPress={() => setShowSettings(false)}>
@@ -283,7 +331,7 @@ export default function App() {
       {/* MODAL MỤC LỤC */}
       <Modal visible={showToc} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { height: '80%' }]}>
+          <View style={[styles.modalContent, { height: '85%' }]}>
             <Text style={styles.modalTitle}>Mục lục (Trang {tocPage + 1}/{totalTocPages})</Text>
             
             <FlatList
@@ -316,7 +364,7 @@ export default function App() {
                 onPress={() => setTocPage(prev => Math.max(0, prev - 1))}
                 disabled={tocPage === 0}
               >
-                <Text style={styles.btnText}>⏪ 100 Chương trước</Text>
+                <Text style={styles.btnText}>⏪ 100 Tệp trước</Text>
               </TouchableOpacity>
               
               <TouchableOpacity 
@@ -324,7 +372,7 @@ export default function App() {
                 onPress={() => setTocPage(prev => Math.min(totalTocPages - 1, prev + 1))}
                 disabled={tocPage >= totalTocPages - 1}
               >
-                <Text style={styles.btnText}>100 Chương tiếp ⏩</Text>
+                <Text style={styles.btnText}>100 Tệp tiếp ⏩</Text>
               </TouchableOpacity>
             </View>
 
@@ -357,19 +405,28 @@ const styles = StyleSheet.create({
   goBtnText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
   contentArea: { flex: 1, backgroundColor: '#ffffff', justifyContent: 'center' },
   textContainer: { padding: 20 },
-  textContent: { fontSize: 18, lineHeight: 28, color: '#212529', textAlign: 'justify' },
+  textContent: { color: '#212529', textAlign: 'justify' }, // Bỏ fontSize fix cứng, đã chuyển lên style động
   pdf: { flex: 1, width: Dimensions.get('window').width, height: Dimensions.get('window').height },
   
-  // Style cho Modal
+  // Style Modal
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
   modalContent: { width: '90%', backgroundColor: '#fff', borderRadius: 8, padding: 20, elevation: 5 },
   modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 5, textAlign: 'center' },
   modalSub: { fontSize: 12, color: '#666', marginBottom: 15, textAlign: 'center' },
   settingInput: { borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 10, marginBottom: 10, fontSize: 14 },
+  
+  // Font Adjuster Style
+  fontAdjuster: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#f8f9fa', padding: 10, borderRadius: 4, marginBottom: 15 },
+  fontLabel: { fontSize: 14, fontWeight: 'bold', color: '#495057' },
+  fontControls: { flexDirection: 'row', alignItems: 'center' },
+  fontBtn: { backgroundColor: '#007BFF', width: 35, height: 35, borderRadius: 17.5, justifyContent: 'center', alignItems: 'center' },
+  fontBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+  fontValue: { fontSize: 16, fontWeight: 'bold', width: 30, textAlign: 'center', marginHorizontal: 10 },
+
   modalActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
   modalBtn: { paddingVertical: 10, paddingHorizontal: 15, borderRadius: 4, flex: 1, marginHorizontal: 5 },
   
-  // Style cho Mục lục
+  // Style Mục lục
   tocItem: { padding: 15, borderBottomWidth: 1, borderBottomColor: '#eee' },
   tocItemActive: { backgroundColor: '#e7f1ff' },
   tocText: { fontSize: 16, color: '#333' },
