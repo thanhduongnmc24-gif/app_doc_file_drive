@@ -3,8 +3,8 @@ import { StyleSheet, Text, View, ScrollView, TouchableOpacity, ActivityIndicator
 import Pdf from 'react-native-pdf';
 
 // Điền thông tin API Key và Thư mục bí mật của anh hai vào đây nhé!
-const API_KEY = 'CHO_NAY_DIEN_API_KEY_CUA_ANH_HAI';
-const FOLDER_ID = 'CHO_NAY_DIEN_FOLDER_ID_CUA_ANH_HAI';
+const API_KEY = 'ae9a18d8b31ba55d7addbee882a1460e29964a5a';
+const FOLDER_ID = '14Uouc776-GmsjpJCgw7SQ3sCN5KFKMCX';
 
 export default function App() {
   const [files, setFiles] = useState([]);
