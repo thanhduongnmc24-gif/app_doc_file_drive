@@ -9,13 +9,11 @@ export default function App() {
   const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
   const [folderId, setFolderId] = useState(DEFAULT_FOLDER_ID);
   
-  // Quản lý Tủ Sách
   const [books, setBooks] = useState([]);
   const [filteredBooks, setFilteredBooks] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentBook, setCurrentBook] = useState(null); 
 
-  // Quản lý Đọc Truyện 
   const [files, setFiles] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [textContent, setTextContent] = useState('');
@@ -24,12 +22,12 @@ export default function App() {
   const [jumpText, setJumpText] = useState('1');
   const [fontSize, setFontSize] = useState(18);
   
-  // Quản lý Giao diện Tàng hình & Phím cứng
-  const [showMenu, setShowMenu] = useState(false); // Mặc định ẩn thanh công cụ
+  const [showMenu, setShowMenu] = useState(false);
   const scrollViewRef = useRef(null);
-  const [scrollOffset, setScrollOffset] = useState(0);
+  
+  const scrollY = useRef(0); 
+  const hiddenInputRef = useRef(null);
 
-  // Các Modal hỗ trợ
   const [showSettings, setShowSettings] = useState(false);
   const [tempApiKey, setTempApiKey] = useState('');
   const [tempFolderId, setTempFolderId] = useState('');
@@ -69,7 +67,7 @@ export default function App() {
       const data = await response.json();
       
       if (data.error) {
-        alert("Lỗi cấu hình Google: " + data.error.message);
+        alert("Lỗi Google: " + data.error.message);
         setLoading(false); return;
       }
       
@@ -89,7 +87,7 @@ export default function App() {
         }
       }
     } catch (error) {
-      alert("Lỗi kết nối tủ sách: " + error.message);
+      alert("Lỗi kết nối: " + error.message);
     }
     setLoading(false);
   };
@@ -100,14 +98,10 @@ export default function App() {
     else setFilteredBooks(books.filter(book => book.name.toLowerCase().includes(text.toLowerCase())));
   };
 
-  // --- TẢI 100 CHƯƠNG ĐẦU TIÊN SIÊU TỐC ---
   const selectBook = async (book) => {
-    setLoading(true);
-    setCurrentBook(book);
-    setShowMenu(false); // Ẩn menu khi mới vào truyện
+    setLoading(true); setCurrentBook(book); setShowMenu(false);
     try {
       const query = `'${book.id}' in parents and (mimeType = 'text/plain' or mimeType = 'application/pdf') and trashed = false`;
-      // Chỉ lấy 100 file đầu tiên cho nhẹ máy
       const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=nextPageToken,files(id,name,mimeType)&orderBy=name&key=${apiKey}&pageSize=100`;
       
       const response = await fetch(url);
@@ -124,25 +118,22 @@ export default function App() {
           if (parsedIdx >= 0 && parsedIdx < sortedFiles.length) initialIdx = parsedIdx;
         }
         
-        setCurrentIndex(initialIdx);
-        setJumpText((initialIdx + 1).toString());
+        setCurrentIndex(initialIdx); setJumpText((initialIdx + 1).toString());
         await loadContent(sortedFiles[initialIdx]);
 
-        // Nếu còn trang tiếp theo, thả tiến trình chạy ngầm
         if (data.nextPageToken) {
           loadRestBackground(book.id, data.nextPageToken, sortedFiles);
         }
       } else {
-        alert("Bộ truyện này chưa có chương nào anh hai ơi!");
+        alert("Chưa có chương nào!");
         setFiles([]); setLoading(false); setCurrentBook(null);
       }
     } catch (error) {
-      alert("Lỗi tải chương: " + error.message);
+      alert("Lỗi: " + error.message);
       setLoading(false); setCurrentBook(null);
     }
   };
 
-  // --- TẢI NGẦM CÁC CHƯƠNG CÒN LẠI PHÍA SAU ---
   const loadRestBackground = async (bookId, initialToken, currentFiles) => {
     let allFiles = [...currentFiles];
     let pageToken = initialToken;
@@ -158,15 +149,16 @@ export default function App() {
       
       const finalSorted = allFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
       setFiles(finalSorted);
-    } catch (error) {
-      console.log("Lỗi tải ngầm:", error);
-    }
+    } catch (error) {}
   };
 
   const loadContent = async (file) => {
     if (!file) return;
     setLoadingContent(true);
-    setScrollOffset(0); // Reset cuộn khi sang chương mới
+    
+    scrollY.current = 0; 
+    scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+
     if (file.mimeType === 'text/plain') {
       try {
         const url = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&key=${apiKey}`;
@@ -174,7 +166,7 @@ export default function App() {
         const text = await response.text();
         setTextContent(text);
       } catch (error) {
-        setTextContent("Lỗi tải nội dung file văn bản.");
+        setTextContent("Lỗi tải nội dung.");
       }
     } else {
       setTextContent(''); 
@@ -189,28 +181,27 @@ export default function App() {
     }
   };
 
-  // --- LẮNG NGHE BÀN PHÍM CỨNG ---
+  const handleScroll = (event) => {
+    scrollY.current = event.nativeEvent.contentOffset.y;
+  };
+
   const handleKeyPress = (e) => {
     const key = e.nativeEvent.key;
-    const scrollStep = Dimensions.get('window').height * 0.7; // Cuộn 70% màn hình
+    const scrollStep = Dimensions.get('window').height * 0.7; 
 
     if (key === '1') {
       handlePrev();
     } else if (key === '3') {
       handleNext();
     } else if (key === '5') {
-      setShowMenu(!showMenu);
+      setShowMenu(prev => !prev);
     } else if (key === '2') {
-      const newOffset = Math.max(0, scrollOffset - scrollStep);
+      const newOffset = Math.max(0, scrollY.current - scrollStep);
       scrollViewRef.current?.scrollTo({ y: newOffset, animated: true });
     } else if (key === '8') {
-      const newOffset = scrollOffset + scrollStep;
+      const newOffset = scrollY.current + scrollStep;
       scrollViewRef.current?.scrollTo({ y: newOffset, animated: true });
     }
-  };
-
-  const handleScroll = (event) => {
-    setScrollOffset(event.nativeEvent.contentOffset.y);
   };
 
   const handleJump = () => {
@@ -221,7 +212,7 @@ export default function App() {
         setCurrentIndex(newIdx); updateProgress(newIdx); loadContent(files[newIdx]);
       }
     } else {
-      alert(`Nhập số từ 1 đến ${files.length} thôi anh hai ơi!`);
+      alert(`Nhập số từ 1 đến ${files.length}`);
       setJumpText((currentIndex + 1).toString());
     }
   };
@@ -279,9 +270,7 @@ export default function App() {
             <Text style={{ fontSize: 22 }}>⚙️</Text>
           </TouchableOpacity>
         </View>
-
         <TextInput style={styles.searchBar} placeholder="🔍 Tìm tên truyện ở đây..." value={searchQuery} onChangeText={handleSearch} />
-
         <FlatList
           data={filteredBooks} keyExtractor={(item) => item.id} contentContainerStyle={{ paddingBottom: 20 }}
           ListEmptyComponent={<Text style={styles.emptyText}>Không tìm thấy truyện nào trúng khớp hết anh hai!</Text>}
@@ -293,13 +282,25 @@ export default function App() {
             </TouchableOpacity>
           )}
         />
-        {/* MODAL CÀI ĐẶT TỦ SÁCH */}
+        
+        {/* MODAL CÀI ĐẶT (Đã tích hợp Tăng/Giảm Cỡ chữ) */}
         <Modal visible={showSettings} animationType="slide" transparent={true}>
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
               <Text style={styles.modalTitle}>Cài đặt Hệ thống</Text>
+              
               <TextInput style={styles.settingInput} placeholder="Nhập API Key..." value={tempApiKey} onChangeText={setTempApiKey} />
               <TextInput style={styles.settingInput} placeholder="Nhập Folder ID tổng..." value={tempFolderId} onChangeText={setTempFolderId} />
+              
+              <View style={[styles.fontAdjuster, {marginTop: 5, marginBottom: 15}]}>
+                <Text style={styles.fontLabel}>Cỡ chữ đọc:</Text>
+                <View style={styles.fontControls}>
+                  <TouchableOpacity style={styles.fontBtn} onPress={() => changeFontSize(-2)}><Text style={styles.fontBtnText}>-</Text></TouchableOpacity>
+                  <Text style={styles.fontValue}>{fontSize}</Text>
+                  <TouchableOpacity style={styles.fontBtn} onPress={() => changeFontSize(2)}><Text style={styles.fontBtnText}>+</Text></TouchableOpacity>
+                </View>
+              </View>
+
               <View style={styles.modalActions}>
                 <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#6c757d'}]} onPress={() => setShowSettings(false)}><Text style={styles.btnText}>Đóng</Text></TouchableOpacity>
                 <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#28a745'}]} onPress={saveSettings}><Text style={styles.btnText}>Lưu</Text></TouchableOpacity>
@@ -318,17 +319,18 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* KHU VỰC ĐỌC TRUYỆN */}
       <View style={styles.contentArea}>
         
-        {/* HACK LẮNG NGHE BÀN PHÍM CỨNG MÀ KHÔNG HIỆN BÀN PHÍM ẢO */}
         <TextInput
-          style={{ position: 'absolute', width: 0, height: 0, opacity: 0 }}
+          ref={hiddenInputRef}
+          style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}
           autoFocus={true}
           showSoftInputOnFocus={false}
+          caretHidden={true}
+          onBlur={() => hiddenInputRef.current?.focus()} 
           onKeyPress={handleKeyPress}
-          autoCapitalize="none"
-          autoCorrect={false}
+          value=""
+          onChangeText={() => {}} 
         />
 
         {loadingContent ? (
@@ -348,7 +350,6 @@ export default function App() {
           <Text style={{textAlign: 'center'}}>Không có nội dung</Text>
         )}
 
-        {/* NÚT TÀNG HÌNH ĐỂ GỌI MENU */}
         {!showMenu && (
           <TouchableOpacity style={styles.floatingBtn} onPress={() => setShowMenu(true)}>
             <Text style={styles.floatingBtnText}>❖</Text>
@@ -356,47 +357,40 @@ export default function App() {
         )}
       </View>
 
-      {/* THANH MENU (CHỈ HIỆN KHI SHOWMENU = TRUE) */}
       {showMenu && (
         <View style={styles.bottomBar}>
           <TouchableOpacity onPress={() => { setCurrentBook(null); setShowMenu(false); }} style={styles.iconButton}>
             <Text style={styles.iconText}>⬅️</Text>
           </TouchableOpacity>
-          
           <TouchableOpacity style={[styles.button, currentIndex === 0 && styles.disabledBtn]} onPress={handlePrev} disabled={currentIndex === 0}>
             <Text style={styles.btnText}>{'<'}</Text>
           </TouchableOpacity>
-          
           <View style={styles.centerNav}>
             <Text style={styles.fileTitle} numberOfLines={1}>{currentFile ? currentFile.name : 'Đang tải...'}</Text>
             <View style={styles.jumpContainer}>
               <TextInput style={styles.jumpInput} keyboardType="numeric" value={jumpText} onChangeText={setJumpText} />
               <Text style={styles.jumpLabel}>/ {files.length}</Text>
-              <TouchableOpacity style={styles.goButton} onPress={handleJump}>
-                <Text style={styles.goBtnText}>Đi</Text>
-              </TouchableOpacity>
+              <TouchableOpacity style={styles.goButton} onPress={handleJump}><Text style={styles.goBtnText}>Đi</Text></TouchableOpacity>
             </View>
           </View>
-          
           <TouchableOpacity style={[styles.button, currentIndex === files.length - 1 && styles.disabledBtn]} onPress={handleNext} disabled={currentIndex === files.length - 1}>
             <Text style={styles.btnText}>{'>'}</Text>
           </TouchableOpacity>
-
           <TouchableOpacity onPress={() => setShowToc(true)} style={styles.iconButton}>
             <Text style={styles.iconText}>☰</Text>
           </TouchableOpacity>
-          
           <TouchableOpacity onPress={() => setShowMenu(false)} style={styles.iconButton}>
             <Text style={{fontSize: 24, color: '#dc3545'}}>×</Text>
           </TouchableOpacity>
         </View>
       )}
 
-      {/* MODAL MỤC LỤC */}
+      {/* MODAL MỤC LỤC TRÀN VIỀN - SIÊU RỘNG */}
       <Modal visible={showToc} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { height: '85%' }]}>
+          <View style={[styles.modalContent, { height: '90%', width: '98%', padding: 10 }]}>
             <Text style={styles.modalTitle}>Mục lục ({tocPage + 1}/{totalTocPages || 1})</Text>
+            
             <FlatList
               data={currentTocList}
               keyExtractor={(item) => item.id}
@@ -410,22 +404,13 @@ export default function App() {
                 );
               }}
             />
+            
             <View style={styles.tocPagination}>
               <TouchableOpacity style={[styles.modalBtn, tocPage === 0 && styles.disabledBtn]} onPress={() => setTocPage(prev => Math.max(0, prev - 1))} disabled={tocPage === 0}><Text style={styles.btnText}>⏪ Trước</Text></TouchableOpacity>
               <TouchableOpacity style={[styles.modalBtn, tocPage >= (totalTocPages - 1) && styles.disabledBtn]} onPress={() => setTocPage(prev => Math.min(totalTocPages - 1, prev + 1))} disabled={tocPage >= (totalTocPages - 1)}><Text style={styles.btnText}>Tiếp ⏩</Text></TouchableOpacity>
             </View>
             
-            {/* Lồng Nút chỉnh cỡ chữ vào Mục lục cho tiện */}
-            <View style={[styles.fontAdjuster, {marginTop: 10}]}>
-              <Text style={styles.fontLabel}>Cỡ chữ:</Text>
-              <View style={styles.fontControls}>
-                <TouchableOpacity style={styles.fontBtn} onPress={() => changeFontSize(-2)}><Text style={styles.fontBtnText}>-</Text></TouchableOpacity>
-                <Text style={styles.fontValue}>{fontSize}</Text>
-                <TouchableOpacity style={styles.fontBtn} onPress={() => changeFontSize(2)}><Text style={styles.fontBtnText}>+</Text></TouchableOpacity>
-              </View>
-            </View>
-
-            <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#6c757d', marginTop: 10}]} onPress={() => setShowToc(false)}><Text style={styles.btnText}>Đóng</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#dc3545', marginTop: 10}]} onPress={() => setShowToc(false)}><Text style={styles.btnText}>Đóng mục lục</Text></TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -440,22 +425,16 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#212529' },
   searchBar: { margin: 12, padding: 10, borderWidth: 1, borderColor: '#ced4da', borderRadius: 8, backgroundColor: '#f8f9fa', fontSize: 14 },
   emptyText: { textAlign: 'center', marginTop: 30, color: '#6c757d' },
-  
   bookItem: { flexDirection: 'row', alignItems: 'center', padding: 15, borderBottomWidth: 1, borderBottomColor: '#eee', backgroundColor: '#fff' },
   bookIcon: { fontSize: 20, marginRight: 12 },
   bookName: { flex: 1, fontSize: 16, fontWeight: '600', color: '#333' },
   arrowIcon: { fontSize: 22, color: '#ccc', marginLeft: 10 },
-
   contentArea: { flex: 1, backgroundColor: '#ffffff', justifyContent: 'center' },
   textContainer: { padding: 15 },
   textContent: { color: '#212529', textAlign: 'justify' },
   pdf: { flex: 1, width: Dimensions.get('window').width, height: Dimensions.get('window').height },
-  
-  // Nút gọi menu tàng hình
   floatingBtn: { position: 'absolute', bottom: 20, right: 20, backgroundColor: 'rgba(0,0,0,0.1)', width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
   floatingBtnText: { fontSize: 20, color: 'rgba(0,0,0,0.4)' },
-
-  // Thanh công cụ bật lên
   bottomBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 5, backgroundColor: '#f8f9fa', borderTopWidth: 1, borderColor: '#dee2e6' },
   button: { backgroundColor: '#007BFF', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 4 },
   iconButton: { padding: 5, marginHorizontal: 2 },
@@ -469,24 +448,21 @@ const styles = StyleSheet.create({
   jumpInput: { borderWidth: 1, borderColor: '#ced4da', borderRadius: 4, width: 35, height: 26, textAlign: 'center', fontSize: 12, backgroundColor: '#fff', padding: 0 },
   goButton: { backgroundColor: '#28a745', paddingVertical: 4, paddingHorizontal: 6, borderRadius: 4, marginLeft: 2 },
   goBtnText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
-  
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
   modalContent: { width: '90%', backgroundColor: '#fff', borderRadius: 8, padding: 20, elevation: 5 },
   modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
   settingInput: { borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 10, marginBottom: 10, fontSize: 14 },
   modalActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
   modalBtn: { paddingVertical: 10, paddingHorizontal: 15, borderRadius: 4, flex: 1, marginHorizontal: 5 },
-  
   fontAdjuster: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#f8f9fa', padding: 10, borderRadius: 4 },
   fontLabel: { fontSize: 14, fontWeight: 'bold', color: '#495057' },
   fontControls: { flexDirection: 'row', alignItems: 'center' },
   fontBtn: { backgroundColor: '#007BFF', width: 35, height: 35, borderRadius: 17.5, justifyContent: 'center', alignItems: 'center' },
   fontBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
   fontValue: { fontSize: 16, fontWeight: 'bold', width: 30, textAlign: 'center', marginHorizontal: 10 },
-
-  tocItem: { padding: 15, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  tocItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#eee' },
   tocItemActive: { backgroundColor: '#e7f1ff' },
-  tocText: { fontSize: 16, color: '#333' },
+  tocText: { fontSize: 15, color: '#333' },
   tocTextActive: { fontWeight: 'bold', color: '#007BFF' },
   tocPagination: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }
 });
