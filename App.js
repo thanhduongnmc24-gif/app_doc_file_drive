@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, ActivityIndicator, SafeAreaView, Dimensions, Platform } from 'react-native';
-import Pdf from 'react-native-pdf';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, ActivityIndicator, SafeAreaView, Dimensions } from 'react-native';
+// Đổi nguồn lấy PDF sang file chim mồi anh em mình vừa tạo
+import Pdf from './PdfReader';
 
-// Điền thông tin API Key và Thư mục bí mật của anh hai vào đây nhé!
 const API_KEY = 'ae9a18d8b31ba55d7addbee882a1460e29964a5a'; 
 const FOLDER_ID = '14Uouc776-GmsjpJCgw7SQ3sCN5KFKMCX';
 
@@ -13,7 +13,6 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [loadingContent, setLoadingContent] = useState(false);
 
-  // Tải danh sách các file .txt và .pdf từ thư mục chỉ định
   const fetchFiles = async () => {
     try {
       const query = `'${FOLDER_ID}' in parents and (mimeType = 'text/plain' or mimeType = 'application/pdf') and trashed = false`;
@@ -35,7 +34,6 @@ export default function App() {
     }
   };
 
-  // Hàm tải dữ liệu text nếu là file .txt
   const loadContent = async (file) => {
     if (!file) return;
     setLoadingContent(true);
@@ -49,7 +47,7 @@ export default function App() {
         setTextContent("Lỗi tải nội dung file văn bản.");
       }
     } else {
-      setTextContent(''); // Để trống để Viewer PDF tự kích hoạt
+      setTextContent(''); 
     }
     setLoadingContent(false);
     setLoading(false);
@@ -128,19 +126,11 @@ export default function App() {
             <Text style={styles.textContent}>{textContent}</Text>
           </ScrollView>
         ) : (
-          Platform.OS === 'web' ? (
-            <View style={styles.center}>
-              <Text style={{ textAlign: 'center', padding: 20 }}>
-                [Môi trường Web] Tạm ẩn PDF để test. Anh hai test thử file .txt và các nút lật trang nhé!
-              </Text>
-            </View>
-          ) : (
-            <Pdf
-              source={{ uri: `https://www.googleapis.com/drive/v3/files/${currentFile.id}?alt=media&key=${API_KEY}` }}
-              style={styles.pdf}
-              onError={(error) => console.log("Lỗi render file PDF:", error)}
-            />
-          )
+          <Pdf
+            source={{ uri: `https://www.googleapis.com/drive/v3/files/${currentFile.id}?alt=media&key=${API_KEY}` }}
+            style={styles.pdf}
+            onError={(error) => console.log("Lỗi render file PDF:", error)}
+          />
         )}
       </View>
 

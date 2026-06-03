@@ -1,0 +1,2 @@
+const API_KEY = 'ae9a18d8b31ba55d7addbee882a1460e29964a5a'; 
+const FOLDER_ID = '14Uouc776-GmsjpJCgw7SQ3sCN5KFKMCX';
