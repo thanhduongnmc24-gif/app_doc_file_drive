@@ -9,14 +9,17 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "@expo/metro-runtime": "~3.2.3",
+    "@expo/metro-runtime": "~3.2.1",
     "@react-native-async-storage/async-storage": "1.23.1",
     "expo": "~51.0.28",
+    "expo-modules-core": "~1.12.12",
+    "expo-status-bar": "~1.12.1",
+    "expo-system-ui": "~3.0.4",
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "react-native": "0.74.5",
-    "react-native-blob-util": "^0.24.9",
-    "react-native-pdf": "^7.0.4",
+    "react-native-blob-util": "0.19.9",
+    "react-native-pdf": "6.7.5",
     "react-native-web": "~0.19.10"
   },
   "devDependencies": {

@@ -15,6 +15,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 18
+          cache: 'npm'
 
       - name: Cài đặt Java JDK 17
         uses: actions/setup-java@v4
@@ -25,19 +26,20 @@ jobs:
       - name: Cài đặt Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Cài đặt các thư viện phụ thuộc
-        run: npm install
+      - name: Cài đặt các thư viện (Ép xung đột phiên bản)
+        run: npm install --legacy-peer-deps
 
-      - name: Thực hiện Expo Prebuild cấu trúc Android Native
-        run: npx expo prebuild --platform android
+      - name: Thực hiện Expo Prebuild sạch sẽ
+        run: npx expo prebuild --platform android --clean
 
       - name: Biên dịch tạo file APK Release
         run: |
           cd android
+          ./gradlew clean
           ./gradlew assembleRelease
 
       - name: Đóng gói và upload file APK lên Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ung-Dung-Doc-Truyen-Cua-Anh-Hai
+          name: Ung-Dung-Doc-Truyen-Vip-Pro
           path: android/app/build/outputs/apk/release/app-release.apk
