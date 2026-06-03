@@ -14,8 +14,7 @@ jobs:
       - name: Khởi tạo Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
-          cache: 'npm'
+          node-version: 20
 
       - name: Cài đặt Java JDK 17
         uses: actions/setup-java@v4
@@ -26,20 +25,22 @@ jobs:
       - name: Cài đặt Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Cài đặt các thư viện (Ép xung đột phiên bản)
-        run: npm install --legacy-peer-deps
+      - name: Dọn rác và cài đặt bằng Yarn (Chống lỗi NPM)
+        run: |
+          rm -rf node_modules package-lock.json
+          npm install -g yarn
+          yarn install
 
-      - name: Thực hiện Expo Prebuild sạch sẽ
+      - name: Thực hiện Expo Prebuild
         run: npx expo prebuild --platform android --clean
 
-      - name: Biên dịch tạo file APK Release
+      - name: Biên dịch tạo file APK Release (Tiết kiệm RAM)
         run: |
           cd android
-          ./gradlew clean
-          ./gradlew assembleRelease
+          ./gradlew assembleRelease --no-daemon
 
       - name: Đóng gói và upload file APK lên Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ung-Dung-Doc-Truyen-Vip-Pro
+          name: Ung-Dung-Doc-Truyen-Cua-Anh-Hai
           path: android/app/build/outputs/apk/release/app-release.apk

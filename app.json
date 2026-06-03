@@ -5,11 +5,11 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "ios": {
-      "supportsTablet": true
-    },
     "android": {
       "package": "com.teotuyetvoi.drivereader"
-    }
+    },
+    "plugins": [
+      "expo-build-properties"
+    ]
   }
 }
