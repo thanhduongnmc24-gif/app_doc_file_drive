@@ -36,22 +36,26 @@ export default function App() {
   const [tocPage, setTocPage] = useState(0); 
   const ITEMS_PER_PAGE = 100;
 
-  // CÁC STATE MỚI TÈO THÊM VÀO
   const [needsConversion, setNeedsConversion] = useState(false);
   const [hasStartedReading, setHasStartedReading] = useState(false);
+
+  // CÁC STATE MỚI CHO VIỆC LƯU CÂY THƯ MỤC
+  const [localTree, setLocalTree] = useState({});
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState('');
 
   useEffect(() => {
     loadInitialSettings();
   }, []);
 
   useEffect(() => {
-    if (currentBook && !loadingContent && !showToc && !showMenu && !needsConversion) {
+    if (currentBook && !loadingContent && !showToc && !showMenu && !needsConversion && !isSyncing) {
       const timer = setTimeout(() => {
         hiddenInputRef.current?.focus();
       }, 300);
       return () => clearTimeout(timer);
     }
-  }, [currentBook, currentIndex, loadingContent, showToc, showMenu, needsConversion]);
+  }, [currentBook, currentIndex, loadingContent, showToc, showMenu, needsConversion, isSyncing]);
 
   const fetchContents = async (fId, key) => {
     let allItems = [];
@@ -90,6 +94,63 @@ export default function App() {
     return { type: 'folders', folders: extractedFolders };
   };
 
+  // Hàm quét và xây dựng toàn bộ cây thư mục lưu vào máy
+  const buildFullTree = async (rootId, key) => {
+    let tree = {};
+    let queue = [{ id: rootId, name: 'Tàng Kinh Các' }];
+    
+    while (queue.length > 0) {
+      let current = queue.shift();
+      setSyncProgress(`Đang quét: ${current.name}...`);
+      
+      const res = await fetchContents(current.id, key);
+      
+      if (res.type === 'story') {
+        tree[current.id] = { type: 'story', files: res.files, name: current.name };
+      } else {
+        tree[current.id] = { type: 'folders', folders: res.folders, name: current.name };
+        for (let f of res.folders) {
+          queue.push(f);
+        }
+      }
+    }
+    return tree;
+  };
+
+  const handleSyncTree = async (fId = folderId, key = apiKey) => {
+    setIsSyncing(true);
+    try {
+      const fullTree = await buildFullTree(fId, key);
+      await AsyncStorage.setItem(`cachedTree_${fId}`, JSON.stringify(fullTree));
+      setLocalTree(fullTree);
+      
+      const rootNode = fullTree[fId];
+      if (rootNode && rootNode.type === 'story') {
+        setFolderStack([{ id: fId, name: '📚 Tàng Kinh Các', folders: [] }]);
+        setCurrentBook({ id: fId, name: 'Truyện gốc' });
+        setFiles(rootNode.files);
+        setHasStartedReading(false);
+        setTextContent('');
+        
+        const savedIndex = await AsyncStorage.getItem(`lastRead_${fId}`);
+        let initialIdx = 0;
+        if (savedIndex) {
+          const parsedIdx = parseInt(savedIndex, 10);
+          if (parsedIdx >= 0 && parsedIdx < rootNode.files.length) initialIdx = parsedIdx;
+        }
+        setCurrentIndex(initialIdx); 
+        setJumpText((initialIdx + 1).toString());
+        setTocPage(Math.floor(initialIdx / ITEMS_PER_PAGE));
+        setShowToc(true); 
+      } else if (rootNode) {
+        setFolderStack([{ id: fId, name: '📚 Tàng Kinh Các', folders: rootNode.folders }]);
+      }
+    } catch (e) {
+      alert("Lỗi tải cây thư mục: " + e.message);
+    }
+    setIsSyncing(false);
+  };
+
   const loadInitialSettings = async () => {
     setLoading(true);
     try {
@@ -104,27 +165,37 @@ export default function App() {
       setApiKey(activeKey);
       setFolderId(activeFolder);
       
-      const result = await fetchContents(activeFolder, activeKey);
+      const savedTree = await AsyncStorage.getItem(`cachedTree_${activeFolder}`);
       
-      if (result.type === 'story') {
-        setFolderStack([{ id: activeFolder, name: '📚 Tàng Kinh Các', folders: [] }]);
-        setCurrentBook({ id: activeFolder, name: 'Truyện gốc' });
-        setFiles(result.files);
-        setHasStartedReading(false);
-        setTextContent('');
+      if (savedTree) {
+        const treeData = JSON.parse(savedTree);
+        setLocalTree(treeData);
         
-        const savedIndex = await AsyncStorage.getItem(`lastRead_${activeFolder}`);
-        let initialIdx = 0;
-        if (savedIndex) {
-          const parsedIdx = parseInt(savedIndex, 10);
-          if (parsedIdx >= 0 && parsedIdx < result.files.length) initialIdx = parsedIdx;
+        const rootNode = treeData[activeFolder];
+        if (rootNode && rootNode.type === 'story') {
+          setFolderStack([{ id: activeFolder, name: '📚 Tàng Kinh Các', folders: [] }]);
+          setCurrentBook({ id: activeFolder, name: 'Truyện gốc' });
+          setFiles(rootNode.files);
+          setHasStartedReading(false);
+          setTextContent('');
+          
+          const savedIndex = await AsyncStorage.getItem(`lastRead_${activeFolder}`);
+          let initialIdx = 0;
+          if (savedIndex) {
+            const parsedIdx = parseInt(savedIndex, 10);
+            if (parsedIdx >= 0 && parsedIdx < rootNode.files.length) initialIdx = parsedIdx;
+          }
+          setCurrentIndex(initialIdx); 
+          setJumpText((initialIdx + 1).toString());
+          setTocPage(Math.floor(initialIdx / ITEMS_PER_PAGE));
+          setShowToc(true); 
+        } else if (rootNode) {
+          setFolderStack([{ id: activeFolder, name: '📚 Tàng Kinh Các', folders: rootNode.folders }]);
+        } else {
+          await handleSyncTree(activeFolder, activeKey);
         }
-        setCurrentIndex(initialIdx); 
-        setJumpText((initialIdx + 1).toString());
-        setTocPage(Math.floor(initialIdx / ITEMS_PER_PAGE));
-        setShowToc(true); // Nhảy thẳng ra mục lục, không tải file nữa
       } else {
-        setFolderStack([{ id: activeFolder, name: '📚 Tàng Kinh Các', folders: result.folders }]);
+        await handleSyncTree(activeFolder, activeKey);
       }
     } catch (e) {
       alert("Lỗi khởi tạo: " + e.message);
@@ -134,37 +205,36 @@ export default function App() {
   };
 
   const handleItemClick = async (item) => {
-    setLoading(true);
-    try {
-      const result = await fetchContents(item.id, apiKey);
-      if (result.type === 'story') {
-        setCurrentBook(item);
-        setShowMenu(false);
-        setFiles(result.files);
-        setHasStartedReading(false);
-        setTextContent('');
-
-        const savedIndex = await AsyncStorage.getItem(`lastRead_${item.id}`);
-        let initialIdx = 0;
-        if (savedIndex) {
-          const parsedIdx = parseInt(savedIndex, 10);
-          if (parsedIdx >= 0 && parsedIdx < result.files.length) initialIdx = parsedIdx;
-        }
-        setCurrentIndex(initialIdx); 
-        setJumpText((initialIdx + 1).toString());
-        setTocPage(Math.floor(initialIdx / ITEMS_PER_PAGE));
-        setShowToc(true); // Chỉ hiện mục lục, chờ anh hai tự bấm
-      } else {
-        setFolderStack(prev => [...prev, { id: item.id, name: item.name, folders: result.folders }]);
-        setSearchQuery('');
-      }
-    } catch (error) {
-      alert("Lỗi mở thư mục: " + error.message);
+    const node = localTree[item.id];
+    
+    if (!node) {
+      alert("Chưa có dữ liệu cho mục này. Anh hai vui lòng bấm nút Làm mới (🔄) ở góc trên nhé!");
+      return;
     }
-    setLoading(false);
+
+    if (node.type === 'story') {
+      setCurrentBook(item);
+      setShowMenu(false);
+      setFiles(node.files);
+      setHasStartedReading(false);
+      setTextContent('');
+
+      const savedIndex = await AsyncStorage.getItem(`lastRead_${item.id}`);
+      let initialIdx = 0;
+      if (savedIndex) {
+        const parsedIdx = parseInt(savedIndex, 10);
+        if (parsedIdx >= 0 && parsedIdx < node.files.length) initialIdx = parsedIdx;
+      }
+      setCurrentIndex(initialIdx); 
+      setJumpText((initialIdx + 1).toString());
+      setTocPage(Math.floor(initialIdx / ITEMS_PER_PAGE));
+      setShowToc(true);
+    } else {
+      setFolderStack(prev => [...prev, { id: item.id, name: item.name, folders: node.folders }]);
+      setSearchQuery('');
+    }
   };
 
-  // Cải tiến luồng loadContent: Chặn đứng file Kindle, chờ bấm nút
   const loadContent = async (file) => {
     if (!file) return;
     setLoadingContent(true);
@@ -177,7 +247,6 @@ export default function App() {
       setNeedsConversion(true);
       setTextContent('');
       setLoadingContent(false);
-      setLoading(false);
       return; 
     }
 
@@ -199,10 +268,9 @@ export default function App() {
     } else {
       setTextContent(''); 
     }
-    setLoadingContent(false); setLoading(false);
+    setLoadingContent(false);
   };
 
-  // Hàm chuyên lo vụ Convert khi anh hai bấm nút
   const handleConvert = async () => {
     const file = files[currentIndex];
     if (!file) return;
@@ -296,22 +364,10 @@ export default function App() {
       setShowSettings(false); setCurrentBook(null); setSearchQuery('');
       setTempApiKey(''); setTempFolderId(''); 
       
-      setLoading(true);
-      const result = await fetchContents(newFolder, newKey);
-      if (result.type === 'story') {
-        setFolderStack([{ id: newFolder, name: '📚 Tàng Kinh Các', folders: [] }]);
-        setCurrentBook({ id: newFolder, name: 'Truyện gốc' });
-        setFiles(result.files);
-        setCurrentIndex(0); setJumpText('1');
-        setTocPage(0);
-        setHasStartedReading(false);
-        setTextContent('');
-        setShowToc(true); // Chỉ mở mục lục
-      } else {
-        setFolderStack([{ id: newFolder, name: '📚 Tàng Kinh Các', folders: result.folders }]);
-      }
-      setLoading(false);
-    } catch (e) { alert('Lỗi lưu cài đặt!'); setLoading(false); }
+      // Khi đổi Folder ID mới thì phải quét và lấy cây thư mục lại từ đầu
+      await handleSyncTree(newFolder, newKey);
+
+    } catch (e) { alert('Lỗi lưu cài đặt!'); }
   };
 
   const changeFontSize = async (delta) => {
@@ -321,11 +377,14 @@ export default function App() {
     }
   };
 
-  if (loading) {
+  if (loading || isSyncing) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#007BFF" />
-        <Text style={{ marginTop: 10, color: '#555' }}>Tèo đang mở kho sách...</Text>
+        <Text style={{ marginTop: 10, color: '#555', fontWeight: 'bold' }}>
+          {isSyncing ? 'Tèo đang tải cấu trúc cây thư mục...' : 'Tèo đang mở kho sách...'}
+        </Text>
+        {isSyncing && <Text style={{ marginTop: 5, color: '#888', textAlign: 'center', paddingHorizontal: 20 }}>{syncProgress}</Text>}
       </View>
     );
   }
@@ -347,6 +406,11 @@ export default function App() {
             </TouchableOpacity>
           )}
           <Text style={[styles.headerTitle, {flex: 1}]} numberOfLines={1}>{currentStackItem.name}</Text>
+          
+          <TouchableOpacity onPress={() => handleSyncTree(folderId, apiKey)} style={{paddingHorizontal: 10}}>
+            <Text style={{ fontSize: 22 }}>🔄</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity onPress={() => setShowSettings(true)} style={{paddingLeft: 10}}>
             <Text style={{ fontSize: 22 }}>⚙️</Text>
           </TouchableOpacity>
@@ -512,7 +576,7 @@ export default function App() {
               onPress={() => {
                 setShowToc(false);
                 if (!hasStartedReading) {
-                  setCurrentBook(null); // Quay ra ngoài thư mục nếu chưa bắt đầu đọc
+                  setCurrentBook(null);
                 }
               }}
             >
