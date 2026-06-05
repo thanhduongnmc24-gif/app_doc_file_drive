@@ -36,20 +36,23 @@ export default function App() {
   const [tocPage, setTocPage] = useState(0); 
   const ITEMS_PER_PAGE = 100;
 
+  // CÁC STATE MỚI TÈO THÊM VÀO
+  const [needsConversion, setNeedsConversion] = useState(false);
+  const [hasStartedReading, setHasStartedReading] = useState(false);
+
   useEffect(() => {
     loadInitialSettings();
   }, []);
 
   useEffect(() => {
-    if (currentBook && !loadingContent && !showToc && !showMenu) {
+    if (currentBook && !loadingContent && !showToc && !showMenu && !needsConversion) {
       const timer = setTimeout(() => {
         hiddenInputRef.current?.focus();
       }, 300);
       return () => clearTimeout(timer);
     }
-  }, [currentBook, currentIndex, loadingContent, showToc, showMenu]);
+  }, [currentBook, currentIndex, loadingContent, showToc, showMenu, needsConversion]);
 
-  // CẢI TIẾN: Nhận diện thêm đuôi .mobi và .azw3
   const fetchContents = async (fId, key) => {
     let allItems = [];
     let pageToken = '';
@@ -64,7 +67,6 @@ export default function App() {
       pageToken = data.nextPageToken;
     } while (pageToken);
 
-    // Lọc lấy cả file chữ thuần lẫn file Kindle
     const readables = allItems.filter(f => 
       f.mimeType === 'text/plain' || 
       f.mimeType === 'application/pdf' ||
@@ -108,14 +110,19 @@ export default function App() {
         setFolderStack([{ id: activeFolder, name: '📚 Tàng Kinh Các', folders: [] }]);
         setCurrentBook({ id: activeFolder, name: 'Truyện gốc' });
         setFiles(result.files);
+        setHasStartedReading(false);
+        setTextContent('');
+        
         const savedIndex = await AsyncStorage.getItem(`lastRead_${activeFolder}`);
         let initialIdx = 0;
         if (savedIndex) {
           const parsedIdx = parseInt(savedIndex, 10);
           if (parsedIdx >= 0 && parsedIdx < result.files.length) initialIdx = parsedIdx;
         }
-        setCurrentIndex(initialIdx); setJumpText((initialIdx + 1).toString());
-        await loadContent(result.files[initialIdx]);
+        setCurrentIndex(initialIdx); 
+        setJumpText((initialIdx + 1).toString());
+        setTocPage(Math.floor(initialIdx / ITEMS_PER_PAGE));
+        setShowToc(true); // Nhảy thẳng ra mục lục, không tải file nữa
       } else {
         setFolderStack([{ id: activeFolder, name: '📚 Tàng Kinh Các', folders: result.folders }]);
       }
@@ -134,6 +141,8 @@ export default function App() {
         setCurrentBook(item);
         setShowMenu(false);
         setFiles(result.files);
+        setHasStartedReading(false);
+        setTextContent('');
 
         const savedIndex = await AsyncStorage.getItem(`lastRead_${item.id}`);
         let initialIdx = 0;
@@ -141,8 +150,10 @@ export default function App() {
           const parsedIdx = parseInt(savedIndex, 10);
           if (parsedIdx >= 0 && parsedIdx < result.files.length) initialIdx = parsedIdx;
         }
-        setCurrentIndex(initialIdx); setJumpText((initialIdx + 1).toString());
-        await loadContent(result.files[initialIdx]);
+        setCurrentIndex(initialIdx); 
+        setJumpText((initialIdx + 1).toString());
+        setTocPage(Math.floor(initialIdx / ITEMS_PER_PAGE));
+        setShowToc(true); // Chỉ hiện mục lục, chờ anh hai tự bấm
       } else {
         setFolderStack(prev => [...prev, { id: item.id, name: item.name, folders: result.folders }]);
         setSearchQuery('');
@@ -153,7 +164,7 @@ export default function App() {
     setLoading(false);
   };
 
-  // CẢI TIẾN: Gửi file Kindle qua cho trạm Render xử lý
+  // Cải tiến luồng loadContent: Chặn đứng file Kindle, chờ bấm nút
   const loadContent = async (file) => {
     if (!file) return;
     setLoadingContent(true);
@@ -162,15 +173,19 @@ export default function App() {
 
     const isKindle = file.name.toLowerCase().endsWith('.mobi') || file.name.toLowerCase().endsWith('.azw3');
 
-    if (file.mimeType === 'text/plain' || isKindle) {
+    if (isKindle) {
+      setNeedsConversion(true);
+      setTextContent('');
+      setLoadingContent(false);
+      setLoading(false);
+      return; 
+    }
+
+    setNeedsConversion(false);
+
+    if (file.mimeType === 'text/plain') {
       try {
         let url = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&key=${apiKey}`;
-        
-        // Bẻ lái sang Trạm Convert nếu đụng file Kindle
-        if (isKindle) {
-          url = `${PROXY_SERVER_URL}/convert?fileId=${file.id}&apiKey=${apiKey}`;
-        }
-
         const response = await fetch(url);
         if (!response.ok) {
           setTextContent("Trạm trung chuyển báo lỗi hoặc file không hợp lệ anh hai ơi!");
@@ -185,6 +200,29 @@ export default function App() {
       setTextContent(''); 
     }
     setLoadingContent(false); setLoading(false);
+  };
+
+  // Hàm chuyên lo vụ Convert khi anh hai bấm nút
+  const handleConvert = async () => {
+    const file = files[currentIndex];
+    if (!file) return;
+    
+    setNeedsConversion(false);
+    setLoadingContent(true);
+    
+    try {
+      const url = `${PROXY_SERVER_URL}/convert?fileId=${file.id}&apiKey=${apiKey}`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        setTextContent("Trạm trung chuyển báo lỗi rồi anh hai ơi!");
+      } else {
+        const text = await response.text();
+        setTextContent(text);
+      }
+    } catch (error) {
+      setTextContent("Lỗi mạng không nhờ trạm Convert được.");
+    }
+    setLoadingContent(false);
   };
 
   const updateProgress = async (index) => {
@@ -216,7 +254,9 @@ export default function App() {
     if (!isNaN(num) && num >= 1 && num <= files.length) {
       const newIdx = num - 1;
       if (newIdx !== currentIndex) {
-        setCurrentIndex(newIdx); updateProgress(newIdx); loadContent(files[newIdx]);
+        setCurrentIndex(newIdx); updateProgress(newIdx); 
+        setHasStartedReading(true);
+        loadContent(files[newIdx]);
       }
     } else {
       alert(`Nhập số từ 1 đến ${files.length}`);
@@ -228,7 +268,9 @@ export default function App() {
     if (currentIndex < files.length - 1) {
       const nextIdx = currentIndex + 1;
       setCurrentIndex(nextIdx); setJumpText((nextIdx + 1).toString());
-      updateProgress(nextIdx); await loadContent(files[nextIdx]);
+      updateProgress(nextIdx); 
+      setHasStartedReading(true);
+      await loadContent(files[nextIdx]);
     }
   };
 
@@ -236,7 +278,9 @@ export default function App() {
     if (currentIndex > 0) {
       const prevIdx = currentIndex - 1;
       setCurrentIndex(prevIdx); setJumpText((prevIdx + 1).toString());
-      updateProgress(prevIdx); await loadContent(files[prevIdx]);
+      updateProgress(prevIdx); 
+      setHasStartedReading(true);
+      await loadContent(files[prevIdx]);
     }
   };
 
@@ -259,7 +303,10 @@ export default function App() {
         setCurrentBook({ id: newFolder, name: 'Truyện gốc' });
         setFiles(result.files);
         setCurrentIndex(0); setJumpText('1');
-        await loadContent(result.files[0]);
+        setTocPage(0);
+        setHasStartedReading(false);
+        setTextContent('');
+        setShowToc(true); // Chỉ mở mục lục
       } else {
         setFolderStack([{ id: newFolder, name: '📚 Tàng Kinh Các', folders: result.folders }]);
       }
@@ -357,7 +404,6 @@ export default function App() {
   const totalTocPages = Math.ceil(files.length / ITEMS_PER_PAGE);
   const currentTocList = files.slice(tocPage * ITEMS_PER_PAGE, (tocPage + 1) * ITEMS_PER_PAGE);
   
-  // Kiểm tra xem file hiện tại có phải là loại hiển thị văn bản không (bao gồm txt và kindle)
   const isTextBased = currentFile && (currentFile.mimeType === 'text/plain' || currentFile.name.toLowerCase().endsWith('.mobi') || currentFile.name.toLowerCase().endsWith('.azw3'));
 
   return (
@@ -378,6 +424,15 @@ export default function App() {
 
         {loadingContent ? (
           <ActivityIndicator size="large" color="#007BFF" />
+        ) : needsConversion ? (
+          <View style={styles.center}>
+            <Text style={{ fontSize: 16, marginBottom: 20, textAlign: 'center', paddingHorizontal: 20, color: '#555' }}>
+              Chương này là file {currentFile?.name.split('.').pop()}, anh hai ấn nút Convert để Tèo dịch ra chữ nha!
+            </Text>
+            <TouchableOpacity style={styles.convertBtn} onPress={handleConvert}>
+              <Text style={styles.convertBtnText}>🚀 Convert & Đọc Ngay</Text>
+            </TouchableOpacity>
+          </View>
         ) : isTextBased ? (
           <ScrollView 
             ref={scrollViewRef} 
@@ -393,7 +448,7 @@ export default function App() {
           <Text style={{textAlign: 'center'}}>Không có nội dung</Text>
         )}
 
-        {!showMenu && (
+        {!showMenu && !showToc && hasStartedReading && (
           <TouchableOpacity style={styles.floatingBtn} onPress={() => setShowMenu(true)}>
             <Text style={styles.floatingBtnText}>❖</Text>
           </TouchableOpacity>
@@ -402,7 +457,7 @@ export default function App() {
 
       {showMenu && (
         <View style={styles.bottomBar}>
-          <TouchableOpacity onPress={() => { setCurrentBook(null); setShowMenu(false); }} style={styles.iconButton}>
+          <TouchableOpacity onPress={() => { setCurrentBook(null); setShowMenu(false); setHasStartedReading(false); }} style={styles.iconButton}>
             <Text style={styles.iconText}>⬅️</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.button, currentIndex === 0 && styles.disabledBtn]} onPress={handlePrev} disabled={currentIndex === 0}>
@@ -440,7 +495,7 @@ export default function App() {
                 const globalIndex = tocPage * ITEMS_PER_PAGE + index;
                 const isCurrent = globalIndex === currentIndex;
                 return (
-                  <TouchableOpacity style={[styles.tocItem, isCurrent && styles.tocItemActive]} onPress={() => { setCurrentIndex(globalIndex); setJumpText((globalIndex + 1).toString()); updateProgress(globalIndex); loadContent(files[globalIndex]); setShowToc(false); setShowMenu(false); }}>
+                  <TouchableOpacity style={[styles.tocItem, isCurrent && styles.tocItemActive]} onPress={() => { setCurrentIndex(globalIndex); setJumpText((globalIndex + 1).toString()); updateProgress(globalIndex); setHasStartedReading(true); loadContent(files[globalIndex]); setShowToc(false); setShowMenu(false); }}>
                     <Text style={[styles.tocText, isCurrent && styles.tocTextActive]}>{item.name}</Text>
                   </TouchableOpacity>
                 );
@@ -452,7 +507,17 @@ export default function App() {
               <TouchableOpacity style={[styles.modalBtn, tocPage >= (totalTocPages - 1) && styles.disabledBtn]} onPress={() => setTocPage(prev => Math.min(totalTocPages - 1, prev + 1))} disabled={tocPage >= (totalTocPages - 1)}><Text style={styles.btnText}>Tiếp ⏩</Text></TouchableOpacity>
             </View>
             
-            <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#dc3545', marginTop: 10}]} onPress={() => setShowToc(false)}><Text style={styles.btnText}>Đóng mục lục</Text></TouchableOpacity>
+            <TouchableOpacity 
+              style={{backgroundColor: '#dc3545', paddingVertical: 12, borderRadius: 6, marginTop: 10, alignItems: 'center'}} 
+              onPress={() => {
+                setShowToc(false);
+                if (!hasStartedReading) {
+                  setCurrentBook(null); // Quay ra ngoài thư mục nếu chưa bắt đầu đọc
+                }
+              }}
+            >
+              <Text style={styles.btnText}>{hasStartedReading ? 'Đóng mục lục' : 'Quay lại thư mục'}</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -507,5 +572,7 @@ const styles = StyleSheet.create({
   tocItemActive: { backgroundColor: '#e7f1ff' },
   tocText: { fontSize: 15, color: '#333' },
   tocTextActive: { fontWeight: 'bold', color: '#007BFF' },
-  tocPagination: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }
+  tocPagination: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
+  convertBtn: { backgroundColor: '#ff9800', paddingVertical: 12, paddingHorizontal: 25, borderRadius: 8, elevation: 3 },
+  convertBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 }
 });
