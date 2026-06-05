@@ -5,18 +5,20 @@ import Pdf from './PdfReader';
 
 const DEFAULT_API_KEY = 'AIzaSyB-WBOZfXXZgehcn-8TOXG-mlE7pxfqPk8';
 const DEFAULT_FOLDER_ID = '1qdFjsfepK500e395iMeyTB8zasDcZtHj';
+
 export default function App() {
   const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
   const [folderId, setFolderId] = useState(DEFAULT_FOLDER_ID);
   
-  const [books, setBooks] = useState([]);
-  const [filteredBooks, setFilteredBooks] = useState([]);
+  // TÍNH NĂNG MỚI: Trí nhớ đa tầng cho Tủ Sách
+  const [folderStack, setFolderStack] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
+  
   const [currentBook, setCurrentBook] = useState(null); 
-
   const [files, setFiles] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [textContent, setTextContent] = useState('');
+  
   const [loading, setLoading] = useState(true);
   const [loadingContent, setLoadingContent] = useState(false);
   const [jumpText, setJumpText] = useState('1');
@@ -24,7 +26,6 @@ export default function App() {
   
   const [showMenu, setShowMenu] = useState(false);
   const scrollViewRef = useRef(null);
-  
   const scrollY = useRef(0); 
   const hiddenInputRef = useRef(null);
 
@@ -36,10 +37,54 @@ export default function App() {
   const ITEMS_PER_PAGE = 100;
 
   useEffect(() => {
-    loadSettings();
+    loadInitialSettings();
   }, []);
 
-  const loadSettings = async () => {
+  useEffect(() => {
+    if (currentBook && !loadingContent && !showToc && !showMenu) {
+      const timer = setTimeout(() => {
+        hiddenInputRef.current?.focus();
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [currentBook, currentIndex, loadingContent, showToc, showMenu]);
+
+  // --- LÕI QUÉT ĐA TẦNG & LẤY GÓC LỐI TẮT ---
+  const fetchContents = async (fId, key) => {
+    let allItems = [];
+    let pageToken = '';
+    do {
+      const query = `'${fId}' in parents and trashed = false`;
+      let url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=nextPageToken,files(id,name,mimeType,shortcutDetails)&orderBy=name&key=${key}&pageSize=1000`;
+      if (pageToken) url += `&pageToken=${pageToken}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      if (data.files) allItems = allItems.concat(data.files);
+      pageToken = data.nextPageToken;
+    } while (pageToken);
+
+    const readables = allItems.filter(f => f.mimeType === 'text/plain' || f.mimeType === 'application/pdf');
+    const folders = allItems.filter(f => f.mimeType === 'application/vnd.google-apps.folder' || f.mimeType === 'application/vnd.google-apps.shortcut');
+
+    // Nếu có file chữ -> Nó là Bộ truyện
+    if (readables.length > 0) {
+      return { type: 'story', files: readables.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })) };
+    }
+
+    // Nếu không có file chữ -> Nó là Thư mục trung gian
+    const extractedFolders = folders.map(f => {
+      if (f.mimeType === 'application/vnd.google-apps.shortcut' && f.shortcutDetails) {
+        return { id: f.shortcutDetails.targetId, name: f.name }; // Xuyên thấu lấy ID thật
+      }
+      return { id: f.id, name: f.name };
+    }).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+    return { type: 'folders', folders: extractedFolders };
+  };
+
+  const loadInitialSettings = async () => {
+    setLoading(true);
     try {
       const savedKey = await AsyncStorage.getItem('customApiKey');
       const savedFolder = await AsyncStorage.getItem('customFolderId');
@@ -52,110 +97,62 @@ export default function App() {
       setApiKey(activeKey);
       setFolderId(activeFolder);
       
-      fetchBooks(activeKey, activeFolder);
-    } catch (e) {
-      fetchBooks(DEFAULT_API_KEY, DEFAULT_FOLDER_ID);
-    }
-  };
-
-  const fetchBooks = async (currentKey, currentFolder) => {
-    setLoading(true);
-    try {
-      const query = `'${currentFolder}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
-      const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)&orderBy=name&key=${currentKey}&pageSize=1000`;
-      const response = await fetch(url);
-      const data = await response.json();
+      const result = await fetchContents(activeFolder, activeKey);
       
-      if (data.error) {
-        alert("Lỗi Google: " + data.error.message);
-        setLoading(false); return;
-      }
-      
-      if (data.files && data.files.length > 0) {
-        const sortedBooks = data.files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-        setBooks(sortedBooks); setFilteredBooks(sortedBooks);
-      } else {
-        try {
-          const metaUrl = `https://www.googleapis.com/drive/v3/files/${currentFolder}?fields=name&key=${currentKey}`;
-          const metaResponse = await fetch(metaUrl);
-          const metaData = await metaResponse.json();
-          const defaultBook = [{ id: currentFolder, name: metaData.name || "Thư mục truyện gốc" }];
-          setBooks(defaultBook); setFilteredBooks(defaultBook);
-        } catch (e) {
-          const defaultBook = [{ id: currentFolder, name: "Truyện Mặc Định" }];
-          setBooks(defaultBook); setFilteredBooks(defaultBook);
+      if (result.type === 'story') {
+        setFolderStack([{ id: activeFolder, name: '📚 Tàng Kinh Các', folders: [] }]);
+        setCurrentBook({ id: activeFolder, name: 'Truyện gốc' });
+        setFiles(result.files);
+        const savedIndex = await AsyncStorage.getItem(`lastRead_${activeFolder}`);
+        let initialIdx = 0;
+        if (savedIndex) {
+          const parsedIdx = parseInt(savedIndex, 10);
+          if (parsedIdx >= 0 && parsedIdx < result.files.length) initialIdx = parsedIdx;
         }
+        setCurrentIndex(initialIdx); setJumpText((initialIdx + 1).toString());
+        await loadContent(result.files[initialIdx]);
+      } else {
+        setFolderStack([{ id: activeFolder, name: '📚 Tàng Kinh Các', folders: result.folders }]);
       }
-    } catch (error) {
-      alert("Lỗi kết nối: " + error.message);
+    } catch (e) {
+      alert("Lỗi khởi tạo: " + e.message);
+      setFolderStack([{ id: DEFAULT_FOLDER_ID, name: '📚 Tàng Kinh Các', folders: [] }]);
     }
     setLoading(false);
   };
 
-  const handleSearch = (text) => {
-    setSearchQuery(text);
-    if (!text.trim()) setFilteredBooks(books);
-    else setFilteredBooks(books.filter(book => book.name.toLowerCase().includes(text.toLowerCase())));
-  };
-
-  const selectBook = async (book) => {
-    setLoading(true); setCurrentBook(book); setShowMenu(false);
+  // KHI BẤM VÀO MỘT TÊN THƯ MỤC BẤT KỲ
+  const handleItemClick = async (item) => {
+    setLoading(true);
     try {
-      const query = `'${book.id}' in parents and (mimeType = 'text/plain' or mimeType = 'application/pdf') and trashed = false`;
-      const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=nextPageToken,files(id,name,mimeType)&orderBy=name&key=${apiKey}&pageSize=100`;
-      
-      const response = await fetch(url);
-      const data = await response.json();
-      
-      if (data.files && data.files.length > 0) {
-        let sortedFiles = data.files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-        setFiles(sortedFiles);
+      const result = await fetchContents(item.id, apiKey);
+      if (result.type === 'story') {
+        setCurrentBook(item);
+        setShowMenu(false);
+        setFiles(result.files);
 
-        const savedIndex = await AsyncStorage.getItem(`lastRead_${book.id}`);
+        const savedIndex = await AsyncStorage.getItem(`lastRead_${item.id}`);
         let initialIdx = 0;
         if (savedIndex) {
           const parsedIdx = parseInt(savedIndex, 10);
-          if (parsedIdx >= 0 && parsedIdx < sortedFiles.length) initialIdx = parsedIdx;
+          if (parsedIdx >= 0 && parsedIdx < result.files.length) initialIdx = parsedIdx;
         }
-        
         setCurrentIndex(initialIdx); setJumpText((initialIdx + 1).toString());
-        await loadContent(sortedFiles[initialIdx]);
-
-        if (data.nextPageToken) {
-          loadRestBackground(book.id, data.nextPageToken, sortedFiles);
-        }
+        await loadContent(result.files[initialIdx]);
       } else {
-        alert("Chưa có chương nào!");
-        setFiles([]); setLoading(false); setCurrentBook(null);
+        // Chui vào tầng sâu hơn
+        setFolderStack(prev => [...prev, { id: item.id, name: item.name, folders: result.folders }]);
+        setSearchQuery('');
       }
     } catch (error) {
-      alert("Lỗi: " + error.message);
-      setLoading(false); setCurrentBook(null);
+      alert("Lỗi mở thư mục: " + error.message);
     }
-  };
-
-  const loadRestBackground = async (bookId, initialToken, currentFiles) => {
-    let allFiles = [...currentFiles];
-    let pageToken = initialToken;
-    try {
-      do {
-        const query = `'${bookId}' in parents and (mimeType = 'text/plain' or mimeType = 'application/pdf') and trashed = false`;
-        const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=nextPageToken,files(id,name,mimeType)&orderBy=name&key=${apiKey}&pageSize=1000&pageToken=${pageToken}`;
-        const response = await fetch(url);
-        const data = await response.json();
-        if (data.files) allFiles = allFiles.concat(data.files);
-        pageToken = data.nextPageToken;
-      } while (pageToken);
-      
-      const finalSorted = allFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-      setFiles(finalSorted);
-    } catch (error) {}
+    setLoading(false);
   };
 
   const loadContent = async (file) => {
     if (!file) return;
     setLoadingContent(true);
-    
     scrollY.current = 0; 
     scrollViewRef.current?.scrollTo({ y: 0, animated: false });
 
@@ -181,21 +178,15 @@ export default function App() {
     }
   };
 
-  const handleScroll = (event) => {
-    scrollY.current = event.nativeEvent.contentOffset.y;
-  };
+  const handleScroll = (event) => { scrollY.current = event.nativeEvent.contentOffset.y; };
 
   const handleKeyPress = (e) => {
     const key = e.nativeEvent.key;
     const scrollStep = Dimensions.get('window').height * 0.7; 
-
-    if (key === '1') {
-      handlePrev();
-    } else if (key === '3') {
-      handleNext();
-    } else if (key === '5') {
-      setShowMenu(prev => !prev);
-    } else if (key === '2') {
+    if (key === '1') handlePrev();
+    else if (key === '3') handleNext();
+    else if (key === '5') setShowMenu(prev => !prev);
+    else if (key === '2') {
       const newOffset = Math.max(0, scrollY.current - scrollStep);
       scrollViewRef.current?.scrollTo({ y: newOffset, animated: true });
     } else if (key === '8') {
@@ -233,15 +224,32 @@ export default function App() {
     }
   };
 
+  // CẢI TIẾN CÀI ĐẶT: Bỏ trống ô nào thì giữ nguyên dữ liệu cũ ô đó
   const saveSettings = async () => {
     try {
-      const newKey = tempApiKey.trim() || DEFAULT_API_KEY;
-      const newFolder = tempFolderId.trim() || DEFAULT_FOLDER_ID;
+      const newKey = tempApiKey.trim() !== '' ? tempApiKey.trim() : apiKey;
+      const newFolder = tempFolderId.trim() !== '' ? tempFolderId.trim() : folderId;
+      
       await AsyncStorage.setItem('customApiKey', newKey);
       await AsyncStorage.setItem('customFolderId', newFolder);
-      setApiKey(newKey); setFolderId(newFolder); setShowSettings(false); setCurrentBook(null); 
-      fetchBooks(newKey, newFolder);
-    } catch (e) { alert('Lỗi lưu cài đặt!'); }
+      
+      setApiKey(newKey); setFolderId(newFolder); 
+      setShowSettings(false); setCurrentBook(null); setSearchQuery('');
+      setTempApiKey(''); setTempFolderId(''); // Reset form
+      
+      setLoading(true);
+      const result = await fetchContents(newFolder, newKey);
+      if (result.type === 'story') {
+        setFolderStack([{ id: newFolder, name: '📚 Tàng Kinh Các', folders: [] }]);
+        setCurrentBook({ id: newFolder, name: 'Truyện gốc' });
+        setFiles(result.files);
+        setCurrentIndex(0); setJumpText('1');
+        await loadContent(result.files[0]);
+      } else {
+        setFolderStack([{ id: newFolder, name: '📚 Tàng Kinh Các', folders: result.folders }]);
+      }
+      setLoading(false);
+    } catch (e) { alert('Lỗi lưu cài đặt!'); setLoading(false); }
   };
 
   const changeFontSize = async (delta) => {
@@ -260,40 +268,58 @@ export default function App() {
     );
   }
 
-  // --- MÀN HÌNH TỦ SÁCH ---
+  // --- MÀN HÌNH TỦ SÁCH (CÓ QUẢN LÝ ĐA TẦNG) ---
   if (!currentBook) {
+    const currentStackItem = folderStack[folderStack.length - 1] || { name: 'Tàng Kinh Các', folders: [] };
+    const displayFolders = currentStackItem.folders;
+    const filteredBooks = searchQuery.trim() === '' 
+      ? displayFolders 
+      : displayFolders.filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase()));
+
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.headerBar}>
-          <Text style={styles.headerTitle}>📚 Tàng Kinh Các</Text>
-          <TouchableOpacity onPress={() => { setTempApiKey(apiKey === DEFAULT_API_KEY ? '' : apiKey); setTempFolderId(folderId === DEFAULT_FOLDER_ID ? '' : folderId); setShowSettings(true); }}>
+          {folderStack.length > 1 && (
+            <TouchableOpacity onPress={() => { setFolderStack(prev => prev.slice(0, -1)); setSearchQuery(''); }} style={{paddingRight: 15}}>
+              <Text style={{ fontSize: 22, color: '#007BFF' }}>⬅️</Text>
+            </TouchableOpacity>
+          )}
+          <Text style={[styles.headerTitle, {flex: 1}]} numberOfLines={1}>{currentStackItem.name}</Text>
+          <TouchableOpacity onPress={() => setShowSettings(true)} style={{paddingLeft: 10}}>
             <Text style={{ fontSize: 22 }}>⚙️</Text>
           </TouchableOpacity>
         </View>
-        <TextInput style={styles.searchBar} placeholder="🔍 Tìm tên truyện ở đây..." value={searchQuery} onChangeText={handleSearch} />
+
+        <TextInput 
+          style={styles.searchBar} 
+          placeholder="🔍 Tìm tên thư mục hoặc truyện..." 
+          value={searchQuery} 
+          onChangeText={setSearchQuery} 
+        />
+
         <FlatList
           data={filteredBooks} keyExtractor={(item) => item.id} contentContainerStyle={{ paddingBottom: 20 }}
-          ListEmptyComponent={<Text style={styles.emptyText}>Không tìm thấy truyện nào trúng khớp hết anh hai!</Text>}
+          ListEmptyComponent={<Text style={styles.emptyText}>Thư mục này trống rỗng anh hai ơi!</Text>}
           renderItem={({ item }) => (
-            <TouchableOpacity style={styles.bookItem} onPress={() => selectBook(item)}>
-              <Text style={styles.bookIcon}>📖</Text>
+            <TouchableOpacity style={styles.bookItem} onPress={() => handleItemClick(item)}>
+              <Text style={styles.bookIcon}>📁</Text>
               <Text style={styles.bookName} numberOfLines={2}>{item.name}</Text>
               <Text style={styles.arrowIcon}>›</Text>
             </TouchableOpacity>
           )}
         />
         
-        {/* MODAL CÀI ĐẶT */}
         <Modal visible={showSettings} animationType="slide" transparent={true}>
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
               <Text style={styles.modalTitle}>Cài đặt Hệ thống</Text>
               
-              <TextInput style={styles.settingInput} placeholder="Nhập API Key..." value={tempApiKey} onChangeText={setTempApiKey} />
-              <TextInput style={styles.settingInput} placeholder="Nhập Folder ID tổng..." value={tempFolderId} onChangeText={setTempFolderId} />
+              <Text style={styles.hintText}>* Bỏ trống nếu muốn giữ nguyên</Text>
+              <TextInput style={styles.settingInput} placeholder="Nhập API Key mới..." value={tempApiKey} onChangeText={setTempApiKey} />
+              <TextInput style={styles.settingInput} placeholder="Nhập Folder ID tổng mới..." value={tempFolderId} onChangeText={setTempFolderId} />
               
               <View style={[styles.fontAdjuster, {marginTop: 5, marginBottom: 15}]}>
-                <Text style={styles.fontLabel}>Cỡ chữ đọc:</Text>
+                <Text style={styles.fontLabel}>Cỡ chữ đọc truyện:</Text>
                 <View style={styles.fontControls}>
                   <TouchableOpacity style={styles.fontBtn} onPress={() => changeFontSize(-2)}><Text style={styles.fontBtnText}>-</Text></TouchableOpacity>
                   <Text style={styles.fontValue}>{fontSize}</Text>
@@ -302,7 +328,7 @@ export default function App() {
               </View>
 
               <View style={styles.modalActions}>
-                <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#6c757d'}]} onPress={() => setShowSettings(false)}><Text style={styles.btnText}>Đóng</Text></TouchableOpacity>
+                <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#6c757d'}]} onPress={() => { setShowSettings(false); setTempApiKey(''); setTempFolderId(''); }}><Text style={styles.btnText}>Đóng</Text></TouchableOpacity>
                 <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#28a745'}]} onPress={saveSettings}><Text style={styles.btnText}>Lưu</Text></TouchableOpacity>
               </View>
             </View>
@@ -321,7 +347,6 @@ export default function App() {
     <SafeAreaView style={styles.container}>
       <View style={styles.contentArea}>
         
-        {/* LÒI CỐT: Ô TÀNG HÌNH BẤT TỬ - ĐÃ BỊ PHONG ẤN BÀN PHÍM ẢO */}
         <TextInput
           ref={hiddenInputRef}
           style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}
@@ -329,7 +354,6 @@ export default function App() {
           showSoftInputOnFocus={false}
           caretHidden={true}
           inputMode="none" 
-          onBlur={() => hiddenInputRef.current?.focus()} 
           onKeyPress={handleKeyPress}
           value=""
           onChangeText={() => {}} 
@@ -387,7 +411,6 @@ export default function App() {
         </View>
       )}
 
-      {/* MODAL MỤC LỤC TRÀN VIỀN */}
       <Modal visible={showToc} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { height: '90%', width: '98%', padding: 10 }]}>
@@ -423,7 +446,7 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#ffffff' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  headerBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, backgroundColor: '#f8f9fa', borderBottomWidth: 1, borderColor: '#dee2e6' },
+  headerBar: { flexDirection: 'row', alignItems: 'center', padding: 15, backgroundColor: '#f8f9fa', borderBottomWidth: 1, borderColor: '#dee2e6' },
   headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#212529' },
   searchBar: { margin: 12, padding: 10, borderWidth: 1, borderColor: '#ced4da', borderRadius: 8, backgroundColor: '#f8f9fa', fontSize: 14 },
   emptyText: { textAlign: 'center', marginTop: 30, color: '#6c757d' },
@@ -452,7 +475,8 @@ const styles = StyleSheet.create({
   goBtnText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
   modalContent: { width: '90%', backgroundColor: '#fff', borderRadius: 8, padding: 20, elevation: 5 },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 5, textAlign: 'center' },
+  hintText: { fontSize: 12, color: '#dc3545', marginBottom: 10, textAlign: 'center', fontStyle: 'italic' },
   settingInput: { borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 10, marginBottom: 10, fontSize: 14 },
   modalActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
   modalBtn: { paddingVertical: 10, paddingHorizontal: 15, borderRadius: 4, flex: 1, marginHorizontal: 5 },
