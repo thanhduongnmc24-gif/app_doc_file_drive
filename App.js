@@ -5,12 +5,12 @@ import Pdf from './PdfReader';
 
 const DEFAULT_API_KEY = 'AIzaSyB-WBOZfXXZgehcn-8TOXG-mlE7pxfqPk8';
 const DEFAULT_FOLDER_ID = '1qdFjsfepK500e395iMeyTB8zasDcZtHj';
+const PROXY_SERVER_URL = 'https://tram-convert-truyen.onrender.com';
 
 export default function App() {
   const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
   const [folderId, setFolderId] = useState(DEFAULT_FOLDER_ID);
   
-  // TÍNH NĂNG MỚI: Trí nhớ đa tầng cho Tủ Sách
   const [folderStack, setFolderStack] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   
@@ -49,7 +49,7 @@ export default function App() {
     }
   }, [currentBook, currentIndex, loadingContent, showToc, showMenu]);
 
-  // --- LÕI QUÉT ĐA TẦNG & LẤY GÓC LỐI TẮT ---
+  // CẢI TIẾN: Nhận diện thêm đuôi .mobi và .azw3
   const fetchContents = async (fId, key) => {
     let allItems = [];
     let pageToken = '';
@@ -64,18 +64,23 @@ export default function App() {
       pageToken = data.nextPageToken;
     } while (pageToken);
 
-    const readables = allItems.filter(f => f.mimeType === 'text/plain' || f.mimeType === 'application/pdf');
+    // Lọc lấy cả file chữ thuần lẫn file Kindle
+    const readables = allItems.filter(f => 
+      f.mimeType === 'text/plain' || 
+      f.mimeType === 'application/pdf' ||
+      f.name.toLowerCase().endsWith('.mobi') ||
+      f.name.toLowerCase().endsWith('.azw3')
+    );
+    
     const folders = allItems.filter(f => f.mimeType === 'application/vnd.google-apps.folder' || f.mimeType === 'application/vnd.google-apps.shortcut');
 
-    // Nếu có file chữ -> Nó là Bộ truyện
     if (readables.length > 0) {
       return { type: 'story', files: readables.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })) };
     }
 
-    // Nếu không có file chữ -> Nó là Thư mục trung gian
     const extractedFolders = folders.map(f => {
       if (f.mimeType === 'application/vnd.google-apps.shortcut' && f.shortcutDetails) {
-        return { id: f.shortcutDetails.targetId, name: f.name }; // Xuyên thấu lấy ID thật
+        return { id: f.shortcutDetails.targetId, name: f.name };
       }
       return { id: f.id, name: f.name };
     }).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
@@ -121,7 +126,6 @@ export default function App() {
     setLoading(false);
   };
 
-  // KHI BẤM VÀO MỘT TÊN THƯ MỤC BẤT KỲ
   const handleItemClick = async (item) => {
     setLoading(true);
     try {
@@ -140,7 +144,6 @@ export default function App() {
         setCurrentIndex(initialIdx); setJumpText((initialIdx + 1).toString());
         await loadContent(result.files[initialIdx]);
       } else {
-        // Chui vào tầng sâu hơn
         setFolderStack(prev => [...prev, { id: item.id, name: item.name, folders: result.folders }]);
         setSearchQuery('');
       }
@@ -150,20 +153,33 @@ export default function App() {
     setLoading(false);
   };
 
+  // CẢI TIẾN: Gửi file Kindle qua cho trạm Render xử lý
   const loadContent = async (file) => {
     if (!file) return;
     setLoadingContent(true);
     scrollY.current = 0; 
     scrollViewRef.current?.scrollTo({ y: 0, animated: false });
 
-    if (file.mimeType === 'text/plain') {
+    const isKindle = file.name.toLowerCase().endsWith('.mobi') || file.name.toLowerCase().endsWith('.azw3');
+
+    if (file.mimeType === 'text/plain' || isKindle) {
       try {
-        const url = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&key=${apiKey}`;
+        let url = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&key=${apiKey}`;
+        
+        // Bẻ lái sang Trạm Convert nếu đụng file Kindle
+        if (isKindle) {
+          url = `${PROXY_SERVER_URL}/convert?fileId=${file.id}&apiKey=${apiKey}`;
+        }
+
         const response = await fetch(url);
-        const text = await response.text();
-        setTextContent(text);
+        if (!response.ok) {
+          setTextContent("Trạm trung chuyển báo lỗi hoặc file không hợp lệ anh hai ơi!");
+        } else {
+          const text = await response.text();
+          setTextContent(text);
+        }
       } catch (error) {
-        setTextContent("Lỗi tải nội dung.");
+        setTextContent("Lỗi mạng không tải được nội dung.");
       }
     } else {
       setTextContent(''); 
@@ -224,7 +240,6 @@ export default function App() {
     }
   };
 
-  // CẢI TIẾN CÀI ĐẶT: Bỏ trống ô nào thì giữ nguyên dữ liệu cũ ô đó
   const saveSettings = async () => {
     try {
       const newKey = tempApiKey.trim() !== '' ? tempApiKey.trim() : apiKey;
@@ -235,7 +250,7 @@ export default function App() {
       
       setApiKey(newKey); setFolderId(newFolder); 
       setShowSettings(false); setCurrentBook(null); setSearchQuery('');
-      setTempApiKey(''); setTempFolderId(''); // Reset form
+      setTempApiKey(''); setTempFolderId(''); 
       
       setLoading(true);
       const result = await fetchContents(newFolder, newKey);
@@ -268,7 +283,7 @@ export default function App() {
     );
   }
 
-  // --- MÀN HÌNH TỦ SÁCH (CÓ QUẢN LÝ ĐA TẦNG) ---
+  // --- MÀN HÌNH TỦ SÁCH ---
   if (!currentBook) {
     const currentStackItem = folderStack[folderStack.length - 1] || { name: 'Tàng Kinh Các', folders: [] };
     const displayFolders = currentStackItem.folders;
@@ -338,10 +353,12 @@ export default function App() {
     );
   }
 
-  // --- MÀN HÌNH ĐỌC TRUYỆN ---
   const currentFile = files[currentIndex];
   const totalTocPages = Math.ceil(files.length / ITEMS_PER_PAGE);
   const currentTocList = files.slice(tocPage * ITEMS_PER_PAGE, (tocPage + 1) * ITEMS_PER_PAGE);
+  
+  // Kiểm tra xem file hiện tại có phải là loại hiển thị văn bản không (bao gồm txt và kindle)
+  const isTextBased = currentFile && (currentFile.mimeType === 'text/plain' || currentFile.name.toLowerCase().endsWith('.mobi') || currentFile.name.toLowerCase().endsWith('.azw3'));
 
   return (
     <SafeAreaView style={styles.container}>
@@ -361,7 +378,7 @@ export default function App() {
 
         {loadingContent ? (
           <ActivityIndicator size="large" color="#007BFF" />
-        ) : currentFile && currentFile.mimeType === 'text/plain' ? (
+        ) : isTextBased ? (
           <ScrollView 
             ref={scrollViewRef} 
             onScroll={handleScroll} 
