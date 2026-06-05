@@ -326,14 +326,20 @@ export default function App() {
 
   const handleKeyPress = (e) => {
     const key = e.nativeEvent.key;
-    const scrollStep = Dimensions.get('window').height * 0.7; 
-    if (key === '1') handlePrev();
-    else if (key === '3') handleNext();
-    else if (key === '5') setShowMenu(prev => !prev);
-    else if (key === '2') {
+    const scrollStep = Dimensions.get('window').height * 0.7; // Cuộn 70% màn hình
+    
+    if (key === '1') {
+      handlePrev();
+    } else if (key === '3') {
+      handleNext();
+    } else if (key === '5') {
+      setShowMenu(prev => !prev);
+    } else if (key === 'ArrowUp' || key === 'DPadUp') {
+      // Phím điều hướng lên
       const newOffset = Math.max(0, scrollY.current - scrollStep);
       scrollViewRef.current?.scrollTo({ y: newOffset, animated: true });
-    } else if (key === '8') {
+    } else if (key === 'ArrowDown' || key === 'DPadDown') {
+      // Phím điều hướng xuống
       const newOffset = scrollY.current + scrollStep;
       scrollViewRef.current?.scrollTo({ y: newOffset, animated: true });
     }
@@ -520,7 +526,7 @@ export default function App() {
           ref={hiddenInputRef}
           style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}
           autoFocus={true}
-          showSoftInputOnFocus={false}
+          showSoftInputOnFocus={false} 
           caretHidden={true}
           inputMode="none" 
           onKeyPress={handleKeyPress}
