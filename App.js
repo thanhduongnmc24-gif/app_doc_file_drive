@@ -38,6 +38,9 @@ export default function App() {
 
   const [needsConversion, setNeedsConversion] = useState(false);
   const [hasStartedReading, setHasStartedReading] = useState(false);
+  
+  // State mới để xử lý phím 9: ẩn/hiện chế độ đọc toàn màn hình (ẩn nút nổi)
+  const [hideFloatingBtn, setHideFloatingBtn] = useState(false);
 
   // CẤC STATE LƯU TRỮ CÂY THƯ MỤC CỤC BỘ (LAZY LOADING)
   const [localTree, setLocalTree] = useState({});
@@ -106,14 +109,12 @@ export default function App() {
       setApiKey(activeKey);
       setFolderId(activeFolder);
       
-      // Tải bộ nhớ đệm cây thư mục cũ lên trước
       const savedTree = await AsyncStorage.getItem(`lazyTree_${activeFolder}`);
       let treeData = savedTree ? JSON.parse(savedTree) : {};
       setLocalTree(treeData);
       
       setFolderStack([{ id: activeFolder, name: '📚 Tàng Kinh Các' }]);
 
-      // Nếu thư mục gốc chưa bao giờ được tải, tiến hành tải bản gốc thôi
       if (!treeData[activeFolder]) {
         const result = await fetchContents(activeFolder, activeKey);
         treeData[activeFolder] = {
@@ -126,7 +127,6 @@ export default function App() {
         setLocalTree({ ...treeData });
       }
 
-      // Xử lý nếu gốc là truyện luôn
       if (treeData[activeFolder].type === 'story') {
         setCurrentBook({ id: activeFolder, name: 'Truyện gốc' });
         setFiles(treeData[activeFolder].files);
@@ -151,7 +151,6 @@ export default function App() {
     setLoading(false);
   };
 
-  // NÚT LÀM MỚI CỤC BỘ - CHỈ LOAD ĐÚNG THƯ MỤC HIỆN TẠI ĐANG XEM
   const handleRefreshCurrent = async () => {
     setLoading(true);
     try {
@@ -190,7 +189,6 @@ export default function App() {
   const handleItemClick = async (item) => {
     const cachedNode = localTree[item.id];
     
-    // Nếu trong máy đã có sẵn thông tin mục này rồi thì mở ra luôn không đợi chờ
     if (cachedNode) {
       if (cachedNode.type === 'story') {
         setCurrentBook(item);
@@ -214,7 +212,6 @@ export default function App() {
         setSearchQuery('');
       }
     } else {
-      // Nếu chưa có thông tin trong máy, tiến hành tải riêng duy nhất mục này thôi
       setLoading(true);
       try {
         const result = await fetchContents(item.id, apiKey);
@@ -326,20 +323,38 @@ export default function App() {
 
   const handleKeyPress = (e) => {
     const key = e.nativeEvent.key;
-    const scrollStep = Dimensions.get('window').height * 0.7; // Cuộn 70% màn hình
-    
+    const scrollStep = Dimensions.get('window').height * 0.7; 
+
     if (key === '1') {
       handlePrev();
     } else if (key === '3') {
       handleNext();
-    } else if (key === '5') {
+    } else if (key === '5' || key === 'Enter') {
+      setShowToc(false);
       setShowMenu(prev => !prev);
-    } else if (key === 'ArrowUp' || key === 'DPadUp') {
-      // Phím điều hướng lên
+    } else if (key === '0') {
+      // Phím Go Back Smart
+      if (showMenu || showToc) {
+        setShowMenu(false);
+        setShowToc(false);
+      } else {
+        setCurrentBook(null);
+        setHasStartedReading(false);
+      }
+    } else if (key === '4') {
+      changeFontSize(-2);
+    } else if (key === '6') {
+      changeFontSize(2);
+    } else if (key === '7') {
+      // Bật Menu để lộ thanh điền nhảy chương
+      setShowMenu(true);
+    } else if (key === '9') {
+      // Bật/tắt chế độ toàn màn hình (ẩn nút menu nổi)
+      setHideFloatingBtn(prev => !prev);
+    } else if (key === 'ArrowUp' || key === 'DPadUp' || key === '2') {
       const newOffset = Math.max(0, scrollY.current - scrollStep);
       scrollViewRef.current?.scrollTo({ y: newOffset, animated: true });
-    } else if (key === 'ArrowDown' || key === 'DPadDown') {
-      // Phím điều hướng xuống
+    } else if (key === 'ArrowDown' || key === 'DPadDown' || key === '8') {
       const newOffset = scrollY.current + scrollStep;
       scrollViewRef.current?.scrollTo({ y: newOffset, animated: true });
     }
@@ -392,7 +407,6 @@ export default function App() {
       setShowSettings(false); setCurrentBook(null); setSearchQuery('');
       setTempApiKey(''); setTempFolderId(''); 
       
-      // Xoá và đặt lại gốc khi cấu hình Folder ID tổng mới
       setLoading(true);
       const result = await fetchContents(newFolder, newKey);
       let treeData = {};
@@ -454,7 +468,6 @@ export default function App() {
           )}
           <Text style={[styles.headerTitle, {flex: 1}]} numberOfLines={1}>{currentStackItem.name}</Text>
           
-          {/* NÚT LÀM MỚI RIÊNG BIỆT CHO MỤC NÀY */}
           <TouchableOpacity onPress={handleRefreshCurrent} style={{paddingHorizontal: 10}}>
             <Text style={{ fontSize: 22 }}>🔄</Text>
           </TouchableOpacity>
@@ -560,7 +573,8 @@ export default function App() {
           <Text style={{textAlign: 'center'}}>Không có nội dung</Text>
         )}
 
-        {!showMenu && !showToc && hasStartedReading && (
+        {/* Nút nổi chỉ hiện khi cờ hideFloatingBtn là false */}
+        {!showMenu && !showToc && hasStartedReading && !hideFloatingBtn && (
           <TouchableOpacity style={styles.floatingBtn} onPress={() => setShowMenu(true)}>
             <Text style={styles.floatingBtnText}>❖</Text>
           </TouchableOpacity>
@@ -601,7 +615,6 @@ export default function App() {
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, paddingHorizontal: 5 }}>
               <Text style={styles.modalTitle}>Mục lục ({tocPage + 1}/{totalTocPages || 1})</Text>
               
-              {/* LÀM MỚI DANH SÁCH CHƯƠNG KHI ĐANG Ở TRONG TRUYỆN */}
               <TouchableOpacity onPress={handleRefreshCurrent} style={{ backgroundColor: '#28a745', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 4 }}>
                 <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>🔄 Tải lại chương</Text>
               </TouchableOpacity>
