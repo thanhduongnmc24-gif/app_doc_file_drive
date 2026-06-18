@@ -4,6 +4,7 @@ import {
   BackHandler,
   FlatList,
   Modal,
+  Platform,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -24,7 +25,7 @@ const MIME_TEXT = 'text/plain';
 const CHAPTER_GROUP_SIZE = 50;
 const READER_SCROLL_LINES = 5;
 const BOTTOM_THRESHOLD = 28;
-const KEY_THROTTLE_MS = 120;
+const KEY_THROTTLE_MS = 150;
 
 const SCREEN_LIBRARY = 'LIBRARY';
 const SCREEN_TOC_GROUPS = 'TOC_GROUPS';
@@ -59,7 +60,7 @@ export default function App() {
   const [readerFooterVisible, setReaderFooterVisible] = useState(true);
 
   const [showJumpModal, setShowJumpModal] = useState(false);
-  const [jumpText, setJumpText] = useState('1');
+  const [jumpText, setJumpText] = useState('');
 
   const scrollViewRef = useRef(null);
   const scrollY = useRef(0);
@@ -72,6 +73,7 @@ export default function App() {
 
   const hiddenInputRef = useRef(null);
   const focusTimerRef = useRef(null);
+
   const keyThrottleRef = useRef({
     key: '',
     time: 0,
@@ -79,18 +81,6 @@ export default function App() {
 
   const contentCacheRef = useRef({});
   const prefetchingRef = useRef({});
-
-  const focusHiddenInput = () => {
-    if (showJumpModal) return;
-
-    if (focusTimerRef.current) {
-      clearTimeout(focusTimerRef.current);
-    }
-
-    focusTimerRef.current = setTimeout(() => {
-      hiddenInputRef.current?.focus();
-    }, 80);
-  };
 
   useEffect(() => {
     loadInitialSettings();
@@ -155,20 +145,16 @@ export default function App() {
     }
   }, [screen, selectedChapterIndex, selectedGroupIndex, chapters.length]);
 
-  const safeScrollToIndex = (listRef, index) => {
-    if (!listRef?.current || index < 0) return;
+  const focusHiddenInput = () => {
+    if (showJumpModal) return;
 
-    requestAnimationFrame(() => {
-      try {
-        listRef.current.scrollToIndex({
-          index,
-          animated: true,
-          viewPosition: 0.45,
-        });
-      } catch (e) {
-        // FlatList đôi khi chưa đo xong item. Bỏ qua để tránh crash.
-      }
-    });
+    if (focusTimerRef.current) {
+      clearTimeout(focusTimerRef.current);
+    }
+
+    focusTimerRef.current = setTimeout(() => {
+      hiddenInputRef.current?.focus();
+    }, 100);
   };
 
   const shouldHandleKey = (key) => {
@@ -185,6 +171,22 @@ export default function App() {
     };
 
     return true;
+  };
+
+  const safeScrollToIndex = (listRef, index) => {
+    if (!listRef?.current || index < 0) return;
+
+    requestAnimationFrame(() => {
+      try {
+        listRef.current.scrollToIndex({
+          index,
+          animated: true,
+          viewPosition: 0.45,
+        });
+      } catch (e) {
+        // Bỏ qua khi FlatList chưa đo xong.
+      }
+    });
   };
 
   const fetchContents = async (fId, key, foldersOnly = false) => {
@@ -379,7 +381,7 @@ export default function App() {
       setSelectedGroupIndex(getGroupIndexForChapter(savedIndex));
       setSelectedIndex(getGroupIndexForChapter(savedIndex));
       setSelectedChapterIndex(savedIndex);
-      setJumpText(String(savedIndex + 1));
+      setJumpText('');
       setScreen(SCREEN_TOC_GROUPS);
 
       prefetchChapterByIndex(savedIndex, storyFiles);
@@ -559,7 +561,7 @@ export default function App() {
     setCurrentChapterIndex(index);
     setSelectedChapterIndex(index);
     setSelectedGroupIndex(getGroupIndexForChapter(index));
-    setJumpText(String(index + 1));
+    setJumpText('');
     setReaderFooterVisible(true);
 
     if (typeof cached === 'string') {
@@ -610,11 +612,11 @@ export default function App() {
   const showJump = () => {
     if (chapters.length === 0) return;
 
-    setJumpText(String(currentChapterIndex + 1));
+    setJumpText('');
     setShowJumpModal(true);
   };
 
-  const handleJump = () => {
+  const confirmJump = () => {
     const num = parseInt(jumpText, 10);
 
     if (Number.isNaN(num) || num < 1 || num > chapters.length) {
@@ -624,6 +626,17 @@ export default function App() {
 
     setShowJumpModal(false);
     openChapter(num - 1);
+  };
+
+  const appendJumpDigit = (digit) => {
+    setJumpText((prev) => {
+      const next = `${prev}${digit}`.replace(/^0+/, '');
+      return next.slice(0, 6);
+    });
+  };
+
+  const removeJumpDigit = () => {
+    setJumpText((prev) => prev.slice(0, -1));
   };
 
   const getGroupCount = () => {
@@ -769,6 +782,7 @@ export default function App() {
   const goBackSmart = () => {
     if (showJumpModal) {
       setShowJumpModal(false);
+      setJumpText('');
       return;
     }
 
@@ -831,10 +845,42 @@ export default function App() {
     }
   };
 
+  const handleJumpKey = (key) => {
+    if (/^[0-9]$/.test(key)) {
+      appendJumpDigit(key);
+      return;
+    }
+
+    if (key === 'Backspace' || key === '#') {
+      removeJumpDigit();
+      return;
+    }
+
+    if (key === '*') {
+      setJumpText('');
+      return;
+    }
+
+    if (key === '5' || key === 'Enter') {
+      confirmJump();
+      return;
+    }
+
+    if (key === '0' && jumpText.length === 0) {
+      setShowJumpModal(false);
+      setJumpText('');
+    }
+  };
+
   const handleKeyPress = (e) => {
     const key = e.nativeEvent.key || '';
 
     if (!shouldHandleKey(key)) {
+      return;
+    }
+
+    if (showJumpModal) {
+      handleJumpKey(key);
       return;
     }
 
@@ -868,13 +914,13 @@ export default function App() {
       return;
     }
 
-    if (key === '4') {
+    if (key === '4' || key === 'ArrowLeft' || key === 'DPadLeft') {
       if (screen === SCREEN_READER) changeFontSize(-2);
       if (screen === SCREEN_TOC_CHAPTERS) previousGroup();
       return;
     }
 
-    if (key === '6') {
+    if (key === '6' || key === 'ArrowRight' || key === 'DPadRight') {
       if (screen === SCREEN_READER) changeFontSize(2);
       else if (screen === SCREEN_TOC_CHAPTERS) nextGroup();
       else refreshCurrent();
@@ -910,7 +956,7 @@ export default function App() {
         autoCorrect={false}
         autoCapitalize="none"
         spellCheck={false}
-        keyboardType="default"
+        keyboardType={Platform.OS === 'android' ? 'visible-password' : 'default'}
         importantForAutofill="no"
         blurOnSubmit={false}
         inputMode="none"
@@ -1025,16 +1071,13 @@ export default function App() {
       <JumpModal
         visible={showJumpModal}
         jumpText={jumpText}
-        setJumpText={setJumpText}
         max={chapters.length}
         onCancel={() => {
           setShowJumpModal(false);
-
-          setTimeout(() => {
-            focusHiddenInput();
-          }, 150);
+          setJumpText('');
+          focusHiddenInput();
         }}
-        onGo={handleJump}
+        onGo={confirmJump}
       />
     </SafeAreaView>
   );
@@ -1280,23 +1323,19 @@ function ReaderScreen({
   );
 }
 
-function JumpModal({ visible, jumpText, setJumpText, max, onCancel, onGo }) {
+function JumpModal({ visible, jumpText, max, onCancel, onGo }) {
   return (
     <Modal visible={visible} animationType="fade" transparent>
       <View style={styles.modalOverlay}>
         <View style={styles.jumpBox}>
           <Text style={styles.jumpTitle}>Nhảy tới chương</Text>
-          <Text style={styles.jumpHint}>Nhập số từ 1 đến {max}</Text>
+          <Text style={styles.jumpHint}>Nhập bằng phím số vật lý</Text>
 
-          <TextInput
-            style={styles.jumpInputLarge}
-            keyboardType="numeric"
-            value={jumpText}
-            onChangeText={setJumpText}
-            autoFocus={true}
-            selectTextOnFocus={true}
-            showSoftInputOnFocus={true}
-          />
+          <View style={styles.jumpDisplay}>
+            <Text style={styles.jumpDisplayText}>{jumpText || '_'}</Text>
+          </View>
+
+          <Text style={styles.jumpHint}>Từ 1 đến {max} · 5/OK đi · # xoá · * xoá hết</Text>
 
           <View style={styles.jumpActions}>
             <TouchableOpacity style={[styles.jumpButton, styles.cancelButton]} onPress={onCancel}>
@@ -1336,9 +1375,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: 1,
     height: 1,
-    opacity: 0,
-    top: -20,
-    left: -20,
+    opacity: 0.01,
+    top: -100,
+    left: -100,
     zIndex: -1,
   },
   center: {
@@ -1453,20 +1492,24 @@ const styles = StyleSheet.create({
     color: '#222222',
   },
   jumpHint: {
-    fontSize: 13,
+    fontSize: 12,
     textAlign: 'center',
     color: '#666666',
-    marginBottom: 10,
+    marginBottom: 8,
   },
-  jumpInputLarge: {
+  jumpDisplay: {
     borderWidth: 1,
     borderColor: '#cccccc',
     borderRadius: 6,
     paddingVertical: 8,
     paddingHorizontal: 10,
-    fontSize: 18,
-    textAlign: 'center',
-    marginBottom: 14,
+    marginBottom: 8,
+    alignItems: 'center',
+  },
+  jumpDisplayText: {
+    fontSize: 24,
+    color: '#111111',
+    fontWeight: 'bold',
   },
   jumpActions: {
     flexDirection: 'row',
