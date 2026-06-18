@@ -1,53 +1,55 @@
-name: Build Android APK Release
+name: Build APK
 
 on:
-  push:
-    branches: [ main ]
-
-# Bịt miệng GitHub không cho cằn nhằn vụ Node.js nữa
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout mã nguồn
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Khởi tạo Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 24 # Lên hẳn Node 24 theo ý GitHub luôn
+          node-version: 18
 
-      - name: Cài đặt Java JDK 17
+      - name: Install dependencies
+        run: npm install
+
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'zulu'
-          java-version: '17'
+          distribution: temurin
+          java-version: "17"
 
-      - name: Cài đặt Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Dọn rác và cài đặt bằng Yarn
+      - name: Accept licenses
+        run: yes | sdkmanager --licenses
+
+      - name: Install SDK packages
         run: |
-          rm -rf node_modules package-lock.json
-          npm install -g yarn
-          yarn install
+          sdkmanager "platform-tools" \
+                    "platforms;android-33" \
+                    "build-tools;33.0.2"
 
-      - name: Thực hiện Expo Prebuild
-        run: npx expo prebuild --platform android --clean
+      - name: Generate android folder (if missing)
+        run: npx expo prebuild -p android --non-interactive || true
 
-      - name: Khóa cứng cấu hình chip thấp nhất (armeabi-v7a)
+      - name: Fix gradlew permission
+        run: chmod +x android/gradlew
+
+      - name: Build APK
         run: |
           cd android
-          # Lệnh của Tèo: Ép hệ thống chỉ biên dịch đúng ruột chip v7a siêu nhẹ
-          sed -i '/defaultConfig {/a \        ndk { abiFilters "armeabi-v7a" }' app/build.gradle
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew assembleRelease
 
-      - name: Đóng gói và upload file APK siêu nhẹ lên Artifacts
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: App-Doc-Truyen-Sieu-Nhe-Cua-Anh-Hai
-          # Trả lại tên đúng cho nó đi tìm
+          name: app-release
           path: android/app/build/outputs/apk/release/app-release.apk
