@@ -3,7 +3,9 @@ import {
   ActivityIndicator,
   BackHandler,
   FlatList,
+  Keyboard,
   Modal,
+  Platform,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -62,14 +64,51 @@ export default function App() {
   const scrollViewRef = useRef(null);
   const scrollY = useRef(0);
   const hiddenInputRef = useRef(null);
+  const keyboardBlockTimerRef = useRef(null);
+
+  const contentCacheRef = useRef({});
+  const prefetchingRef = useRef({});
+
+  const focusHiddenInput = () => {
+    if (showJumpModal) return;
+
+    hiddenInputRef.current?.focus();
+
+    setTimeout(() => {
+      Keyboard.dismiss();
+    }, 30);
+  };
+
+  const hardDismissKeyboard = () => {
+    if (showJumpModal) return;
+
+    Keyboard.dismiss();
+
+    if (keyboardBlockTimerRef.current) {
+      clearTimeout(keyboardBlockTimerRef.current);
+    }
+
+    keyboardBlockTimerRef.current = setTimeout(() => {
+      Keyboard.dismiss();
+      hiddenInputRef.current?.focus();
+    }, 80);
+  };
 
   useEffect(() => {
     loadInitialSettings();
+
+    return () => {
+      if (keyboardBlockTimerRef.current) {
+        clearTimeout(keyboardBlockTimerRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
+    if (showJumpModal) return;
+
     const timer = setTimeout(() => {
-      hiddenInputRef.current?.focus();
+      focusHiddenInput();
     }, 250);
 
     return () => clearTimeout(timer);
@@ -85,13 +124,37 @@ export default function App() {
   ]);
 
   useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', () => {
+      if (!showJumpModal) {
+        Keyboard.dismiss();
+
+        setTimeout(() => {
+          hiddenInputRef.current?.focus();
+        }, 80);
+      }
+    });
+
+    return () => {
+      showSub.remove();
+    };
+  }, [showJumpModal]);
+
+  useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       goBackSmart();
       return true;
     });
 
     return () => sub.remove();
-  }, [screen, folderStack, currentBook, chapters, currentChapterIndex, selectedGroupIndex]);
+  }, [
+    screen,
+    folderStack,
+    currentBook,
+    chapters,
+    currentChapterIndex,
+    selectedGroupIndex,
+    showJumpModal,
+  ]);
 
   const fetchContents = async (fId, key, foldersOnly = false) => {
     let allItems = [];
@@ -103,11 +166,11 @@ export default function App() {
         : `'${fId}' in parents and trashed = false`;
 
       let url =
-        `https://www.googleapis.com/drive/v3/files` +
+        'https://www.googleapis.com/drive/v3/files' +
         `?q=${encodeURIComponent(query)}` +
-        `&fields=nextPageToken,files(id,name,mimeType,shortcutDetails)` +
-        `&orderBy=name` +
-        `&pageSize=1000` +
+        '&fields=nextPageToken,files(id,name,mimeType,shortcutDetails)' +
+        '&orderBy=name' +
+        '&pageSize=1000' +
         `&key=${key}`;
 
       if (pageToken) {
@@ -129,9 +192,7 @@ export default function App() {
     } while (pageToken);
 
     const folders = allItems
-      .filter((item) => {
-        return item.mimeType === MIME_FOLDER || item.mimeType === MIME_SHORTCUT;
-      })
+      .filter((item) => item.mimeType === MIME_FOLDER || item.mimeType === MIME_SHORTCUT)
       .map((item) => {
         if (item.mimeType === MIME_SHORTCUT && item.shortcutDetails) {
           return {
@@ -185,9 +246,12 @@ export default function App() {
 
     try {
       const savedFontSize = await AsyncStorage.getItem('customFontSize');
+
       if (savedFontSize) {
         const parsed = parseInt(savedFontSize, 10);
-        if (!Number.isNaN(parsed)) setFontSize(parsed);
+        if (!Number.isNaN(parsed)) {
+          setFontSize(parsed);
+        }
       }
 
       setFolderStack([{ id: folderId, name: '📚 Tàng Kinh Các' }]);
@@ -252,7 +316,6 @@ export default function App() {
       };
 
       await saveTree(updatedTree);
-
       openNodeFromCache(item, updatedTree[item.id]);
     } catch (e) {
       alert('Lỗi tải mục: ' + e.message);
@@ -265,13 +328,20 @@ export default function App() {
     if (node.type === 'story') {
       const storyFiles = node.files || [];
 
+      contentCacheRef.current = {};
+      prefetchingRef.current = {};
+
       setCurrentBook({ id: item.id, name: item.name });
       setChapters(storyFiles);
       setTextContent('');
 
       const savedIndexRaw = await AsyncStorage.getItem(`lastRead_${item.id}`);
       let savedIndex = parseInt(savedIndexRaw || '0', 10);
-      if (Number.isNaN(savedIndex)) savedIndex = 0;
+
+      if (Number.isNaN(savedIndex)) {
+        savedIndex = 0;
+      }
+
       savedIndex = Math.max(0, Math.min(savedIndex, storyFiles.length - 1));
 
       setCurrentChapterIndex(savedIndex);
@@ -280,6 +350,10 @@ export default function App() {
       setSelectedChapterIndex(savedIndex);
       setJumpText(String(savedIndex + 1));
       setScreen(SCREEN_TOC_GROUPS);
+
+      prefetchChapterByIndex(savedIndex, storyFiles);
+      prefetchChapterByIndex(savedIndex + 1, storyFiles);
+
       return;
     }
 
@@ -297,6 +371,7 @@ export default function App() {
         setLoadingText(`Đang tải lại ${currentBook.name}...`);
 
         const result = await fetchContents(currentBook.id, apiKey, false);
+
         const updatedTree = {
           ...localTree,
           [currentBook.id]: {
@@ -309,16 +384,22 @@ export default function App() {
 
         await saveTree(updatedTree);
 
+        contentCacheRef.current = {};
+        prefetchingRef.current = {};
+
         const newFiles = result.files || [];
         setChapters(newFiles);
 
         const safeIndex = Math.min(currentChapterIndex, Math.max(0, newFiles.length - 1));
+
         setCurrentChapterIndex(safeIndex);
         setSelectedGroupIndex(getGroupIndexForChapter(safeIndex));
         setSelectedIndex(getGroupIndexForChapter(safeIndex));
         setSelectedChapterIndex(safeIndex);
-
         setScreen(SCREEN_TOC_GROUPS);
+
+        prefetchChapterByIndex(safeIndex, newFiles);
+        prefetchChapterByIndex(safeIndex + 1, newFiles);
       } else {
         const currentFolder = folderStack[folderStack.length - 1] || {
           id: folderId,
@@ -352,31 +433,84 @@ export default function App() {
     setLoading(false);
   };
 
+  const downloadChapterText = async (file) => {
+    if (!file) return '';
+
+    const cached = contentCacheRef.current[file.id];
+
+    if (typeof cached === 'string') {
+      return cached;
+    }
+
+    const url = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&key=${apiKey}`;
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Lỗi tải chương');
+    }
+
+    const text = await response.text();
+    contentCacheRef.current[file.id] = text;
+
+    return text;
+  };
+
+  const prefetchChapterByIndex = async (index, chapterList = chapters) => {
+    if (index < 0 || index >= chapterList.length) return;
+
+    const file = chapterList[index];
+    if (!file) return;
+
+    if (typeof contentCacheRef.current[file.id] === 'string') return;
+    if (prefetchingRef.current[file.id]) return;
+
+    prefetchingRef.current[file.id] = true;
+
+    try {
+      const text = await downloadChapterText(file);
+      contentCacheRef.current[file.id] = text;
+    } catch (e) {
+      // Prefetch lỗi thì bỏ qua, khi mở chương sẽ tải lại.
+    } finally {
+      delete prefetchingRef.current[file.id];
+    }
+  };
+
   const loadContent = async (file, index) => {
     if (!file) return;
 
-    setLoadingContent(true);
-    setTextContent('');
     scrollY.current = 0;
     scrollViewRef.current?.scrollTo({ y: 0, animated: false });
 
-    try {
-      const url = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&key=${apiKey}`;
-      const response = await fetch(url);
+    const cached = contentCacheRef.current[file.id];
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        setTextContent(`Lỗi tải chương:\n${errorText}`);
-      } else {
-        const text = await response.text();
-        setTextContent(text);
-      }
+    if (typeof cached === 'string') {
+      setLoadingContent(false);
+      setTextContent(cached);
 
       if (currentBook) {
         await AsyncStorage.setItem(`lastRead_${currentBook.id}`, String(index));
       }
+
+      prefetchChapterByIndex(index + 1);
+      return;
+    }
+
+    setLoadingContent(true);
+    setTextContent('');
+
+    try {
+      const text = await downloadChapterText(file);
+      setTextContent(text);
+
+      if (currentBook) {
+        await AsyncStorage.setItem(`lastRead_${currentBook.id}`, String(index));
+      }
+
+      prefetchChapterByIndex(index + 1);
     } catch (e) {
-      setTextContent('Lỗi mạng không tải được nội dung.');
+      setTextContent('Lỗi tải chương:\n' + e.message);
     }
 
     setLoadingContent(false);
@@ -385,6 +519,9 @@ export default function App() {
   const openChapter = async (index) => {
     if (index < 0 || index >= chapters.length) return;
 
+    const file = chapters[index];
+    const cached = file ? contentCacheRef.current[file.id] : null;
+
     setScreen(SCREEN_READER);
     setCurrentChapterIndex(index);
     setSelectedChapterIndex(index);
@@ -392,11 +529,26 @@ export default function App() {
     setJumpText(String(index + 1));
     setReaderFooterVisible(true);
 
-    await loadContent(chapters[index], index);
+    if (typeof cached === 'string') {
+      setLoadingContent(false);
+      setTextContent(cached);
+      scrollY.current = 0;
+      scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+
+      if (currentBook) {
+        await AsyncStorage.setItem(`lastRead_${currentBook.id}`, String(index));
+      }
+
+      prefetchChapterByIndex(index + 1);
+      return;
+    }
+
+    await loadContent(file, index);
   };
 
   const previousChapter = () => {
     if (screen !== SCREEN_READER) return;
+
     if (currentChapterIndex > 0) {
       openChapter(currentChapterIndex - 1);
     }
@@ -404,6 +556,7 @@ export default function App() {
 
   const nextChapter = () => {
     if (screen !== SCREEN_READER) return;
+
     if (currentChapterIndex < chapters.length - 1) {
       openChapter(currentChapterIndex + 1);
     }
@@ -414,11 +567,13 @@ export default function App() {
 
     const newSize = Math.max(12, Math.min(50, fontSize + delta));
     setFontSize(newSize);
+
     await AsyncStorage.setItem('customFontSize', String(newSize));
   };
 
   const showJump = () => {
     if (chapters.length === 0) return;
+
     setJumpText(String(currentChapterIndex + 1));
     setShowJumpModal(true);
   };
@@ -437,11 +592,13 @@ export default function App() {
 
   const getGroupCount = () => {
     if (chapters.length === 0) return 0;
+
     return Math.ceil(chapters.length / CHAPTER_GROUP_SIZE);
   };
 
   function getGroupIndexForChapter(chapterIndex) {
     if (chapterIndex < 0) return 0;
+
     return Math.floor(chapterIndex / CHAPTER_GROUP_SIZE);
   }
 
@@ -498,9 +655,7 @@ export default function App() {
     if (screen === SCREEN_LIBRARY) {
       if (currentItems.length === 0) return;
 
-      setSelectedIndex((prev) => {
-        return Math.max(0, Math.min(prev + delta, currentItems.length - 1));
-      });
+      setSelectedIndex((prev) => Math.max(0, Math.min(prev + delta, currentItems.length - 1)));
       return;
     }
 
@@ -513,6 +668,7 @@ export default function App() {
         setSelectedGroupIndex(next);
         return next;
       });
+
       return;
     }
 
@@ -520,9 +676,7 @@ export default function App() {
       const start = getGroupStartIndex(selectedGroupIndex);
       const end = getGroupEndIndex(selectedGroupIndex);
 
-      setSelectedChapterIndex((prev) => {
-        return Math.max(start, Math.min(prev + delta, end));
-      });
+      setSelectedChapterIndex((prev) => Math.max(start, Math.min(prev + delta, end)));
       return;
     }
 
@@ -584,12 +738,16 @@ export default function App() {
       setSelectedGroupIndex(0);
       setSelectedChapterIndex(0);
 
+      contentCacheRef.current = {};
+      prefetchingRef.current = {};
+
       if (folderStack.length > 1) {
         const newStack = folderStack.slice(0, -1);
         setFolderStack(newStack);
 
         const parent = newStack[newStack.length - 1];
         const parentNode = localTree[parent.id] || { folders: [] };
+
         setCurrentItems(parentNode.folders || []);
         setSelectedIndex(0);
         setScreen(SCREEN_LIBRARY);
@@ -620,6 +778,8 @@ export default function App() {
 
   const handleKeyPress = (e) => {
     const key = e.nativeEvent.key;
+
+    hardDismissKeyboard();
 
     if (key === '2' || key === 'ArrowUp' || key === 'DPadUp') {
       moveSelection(-1);
@@ -685,13 +845,25 @@ export default function App() {
       <TextInput
         ref={hiddenInputRef}
         style={styles.hiddenInput}
-        autoFocus
+        autoFocus={false}
+        focusable={true}
         showSoftInputOnFocus={false}
-        caretHidden
+        caretHidden={true}
+        contextMenuHidden={true}
+        autoCorrect={false}
+        autoCapitalize="none"
+        spellCheck={false}
+        keyboardType={Platform.OS === 'android' ? 'visible-password' : 'default'}
+        importantForAutofill="no"
+        blurOnSubmit={false}
         inputMode="none"
+        onFocus={hardDismissKeyboard}
+        onPressIn={hardDismissKeyboard}
         onKeyPress={handleKeyPress}
         value=""
-        onChangeText={() => {}}
+        onChangeText={() => {
+          hardDismissKeyboard();
+        }}
       />
     );
   };
@@ -700,6 +872,7 @@ export default function App() {
     return (
       <SafeAreaView style={styles.container}>
         {renderHiddenInput()}
+
         <View style={styles.center}>
           <ActivityIndicator size="large" color="#333333" />
           <Text style={styles.loadingText}>{loadingText}</Text>
@@ -738,6 +911,7 @@ export default function App() {
           onPressGroup={(groupIndex) => {
             setSelectedIndex(groupIndex);
             setSelectedGroupIndex(groupIndex);
+
             const start = getGroupStartIndex(groupIndex);
             const end = getGroupEndIndex(groupIndex);
 
@@ -786,7 +960,13 @@ export default function App() {
         jumpText={jumpText}
         setJumpText={setJumpText}
         max={chapters.length}
-        onCancel={() => setShowJumpModal(false)}
+        onCancel={() => {
+          setShowJumpModal(false);
+
+          setTimeout(() => {
+            focusHiddenInput();
+          }, 150);
+        }}
         onGo={handleJump}
       />
     </SafeAreaView>
@@ -1004,8 +1184,9 @@ function JumpModal({ visible, jumpText, setJumpText, max, onCancel, onGo }) {
             keyboardType="numeric"
             value={jumpText}
             onChangeText={setJumpText}
-            autoFocus
-            selectTextOnFocus
+            autoFocus={true}
+            selectTextOnFocus={true}
+            showSoftInputOnFocus={true}
           />
 
           <View style={styles.jumpActions}>
@@ -1047,8 +1228,8 @@ const styles = StyleSheet.create({
     width: 1,
     height: 1,
     opacity: 0,
-    top: 0,
-    left: 0,
+    top: -10,
+    left: -10,
     zIndex: -1,
   },
   center: {
