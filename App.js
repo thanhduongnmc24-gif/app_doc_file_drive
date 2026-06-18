@@ -1,710 +1,1202 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, ActivityIndicator, SafeAreaView, Dimensions, TextInput, Modal, FlatList } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  BackHandler,
+  FlatList,
+  Modal,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Pdf from './PdfReader';
 
 const DEFAULT_API_KEY = 'AIzaSyB-WBOZfXXZgehcn-8TOXG-mlE7pxfqPk8';
 const DEFAULT_FOLDER_ID = '1qdFjsfepK500e395iMeyTB8zasDcZtHj';
-const PROXY_SERVER_URL = 'https://tram-convert-truyen.onrender.com';
+
+const MIME_FOLDER = 'application/vnd.google-apps.folder';
+const MIME_SHORTCUT = 'application/vnd.google-apps.shortcut';
+const MIME_TEXT = 'text/plain';
+
+const CHAPTER_GROUP_SIZE = 50;
+const READER_SCROLL_LINES = 5;
+
+const SCREEN_LIBRARY = 'LIBRARY';
+const SCREEN_TOC_GROUPS = 'TOC_GROUPS';
+const SCREEN_TOC_CHAPTERS = 'TOC_CHAPTERS';
+const SCREEN_READER = 'READER';
 
 export default function App() {
-  const [apiKey, setApiKey] = useState(DEFAULT_API_KEY);
-  const [folderId, setFolderId] = useState(DEFAULT_FOLDER_ID);
-  
-  const [folderStack, setFolderStack] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  
-  const [currentBook, setCurrentBook] = useState(null); 
-  const [files, setFiles] = useState([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [textContent, setTextContent] = useState('');
-  
+  const [apiKey] = useState(DEFAULT_API_KEY);
+  const [folderId] = useState(DEFAULT_FOLDER_ID);
+
   const [loading, setLoading] = useState(true);
+  const [loadingText, setLoadingText] = useState('Đang khởi động...');
   const [loadingContent, setLoadingContent] = useState(false);
-  const [jumpText, setJumpText] = useState('1');
-  const [fontSize, setFontSize] = useState(18);
-  
-  const [showMenu, setShowMenu] = useState(false);
-  const scrollViewRef = useRef(null);
-  const scrollY = useRef(0); 
-  const hiddenInputRef = useRef(null);
 
-  const [showSettings, setShowSettings] = useState(false);
-  const [tempApiKey, setTempApiKey] = useState('');
-  const [tempFolderId, setTempFolderId] = useState('');
-  const [showToc, setShowToc] = useState(false);
-  const [tocPage, setTocPage] = useState(0); 
-  const ITEMS_PER_PAGE = 100;
+  const [screen, setScreen] = useState(SCREEN_LIBRARY);
 
-  const [needsConversion, setNeedsConversion] = useState(false);
-  const [hasStartedReading, setHasStartedReading] = useState(false);
-  
-  // State mới để xử lý phím 9: ẩn/hiện chế độ đọc toàn màn hình (ẩn nút nổi)
-  const [hideFloatingBtn, setHideFloatingBtn] = useState(false);
-
-  // CẤC STATE LƯU TRỮ CÂY THƯ MỤC CỤC BỘ (LAZY LOADING)
+  const [folderStack, setFolderStack] = useState([]);
   const [localTree, setLocalTree] = useState({});
+
+  const [currentItems, setCurrentItems] = useState([]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+
+  const [currentBook, setCurrentBook] = useState(null);
+  const [chapters, setChapters] = useState([]);
+  const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
+
+  const [selectedGroupIndex, setSelectedGroupIndex] = useState(0);
+  const [selectedChapterIndex, setSelectedChapterIndex] = useState(0);
+
+  const [textContent, setTextContent] = useState('');
+  const [fontSize, setFontSize] = useState(18);
+  const [readerFooterVisible, setReaderFooterVisible] = useState(true);
+
+  const [showJumpModal, setShowJumpModal] = useState(false);
+  const [jumpText, setJumpText] = useState('1');
+
+  const scrollViewRef = useRef(null);
+  const scrollY = useRef(0);
+  const hiddenInputRef = useRef(null);
 
   useEffect(() => {
     loadInitialSettings();
   }, []);
 
   useEffect(() => {
-    if (currentBook && !loadingContent && !showToc && !showMenu && !needsConversion) {
-      const timer = setTimeout(() => {
-        hiddenInputRef.current?.focus();
-      }, 300);
-      return () => clearTimeout(timer);
-    }
-  }, [currentBook, currentIndex, loadingContent, showToc, showMenu, needsConversion]);
+    const timer = setTimeout(() => {
+      hiddenInputRef.current?.focus();
+    }, 250);
 
-  const fetchContents = async (fId, key) => {
+    return () => clearTimeout(timer);
+  }, [
+    screen,
+    loading,
+    loadingContent,
+    selectedIndex,
+    selectedGroupIndex,
+    selectedChapterIndex,
+    currentChapterIndex,
+    showJumpModal,
+  ]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      goBackSmart();
+      return true;
+    });
+
+    return () => sub.remove();
+  }, [screen, folderStack, currentBook, chapters, currentChapterIndex, selectedGroupIndex]);
+
+  const fetchContents = async (fId, key, foldersOnly = false) => {
     let allItems = [];
     let pageToken = '';
+
     do {
-      const query = `'${fId}' in parents and trashed = false`;
-      let url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=nextPageToken,files(id,name,mimeType,shortcutDetails)&orderBy=name&key=${key}&pageSize=1000`;
-      if (pageToken) url += `&pageToken=${pageToken}`;
+      const query = foldersOnly
+        ? `'${fId}' in parents and trashed = false and (mimeType = '${MIME_FOLDER}' or mimeType = '${MIME_SHORTCUT}')`
+        : `'${fId}' in parents and trashed = false`;
+
+      let url =
+        `https://www.googleapis.com/drive/v3/files` +
+        `?q=${encodeURIComponent(query)}` +
+        `&fields=nextPageToken,files(id,name,mimeType,shortcutDetails)` +
+        `&orderBy=name` +
+        `&pageSize=1000` +
+        `&key=${key}`;
+
+      if (pageToken) {
+        url += `&pageToken=${encodeURIComponent(pageToken)}`;
+      }
+
       const res = await fetch(url);
       const data = await res.json();
-      if (data.error) throw new Error(data.error.message);
-      if (data.files) allItems = allItems.concat(data.files);
-      pageToken = data.nextPageToken;
+
+      if (data.error) {
+        throw new Error(data.error.message || 'Lỗi Google Drive API');
+      }
+
+      if (data.files) {
+        allItems = allItems.concat(data.files);
+      }
+
+      pageToken = data.nextPageToken || '';
     } while (pageToken);
 
-    const readables = allItems.filter(f => 
-      f.mimeType === 'text/plain' || 
-      f.mimeType === 'application/pdf' ||
-      f.name.toLowerCase().endsWith('.mobi') ||
-      f.name.toLowerCase().endsWith('.azw3')
-    );
-    
-    const folders = allItems.filter(f => f.mimeType === 'application/vnd.google-apps.folder' || f.mimeType === 'application/vnd.google-apps.shortcut');
+    const folders = allItems
+      .filter((item) => {
+        return item.mimeType === MIME_FOLDER || item.mimeType === MIME_SHORTCUT;
+      })
+      .map((item) => {
+        if (item.mimeType === MIME_SHORTCUT && item.shortcutDetails) {
+          return {
+            id: item.shortcutDetails.targetId,
+            name: item.name,
+            mimeType: item.shortcutDetails.targetMimeType || MIME_FOLDER,
+          };
+        }
 
-    if (readables.length > 0) {
-      return { type: 'story', files: readables.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })) };
+        return {
+          id: item.id,
+          name: item.name,
+          mimeType: item.mimeType,
+        };
+      })
+      .filter((item) => item.id)
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+    const txtFiles = foldersOnly
+      ? []
+      : allItems
+          .filter((item) => {
+            const name = item.name.toLowerCase();
+            return item.mimeType === MIME_TEXT || name.endsWith('.txt');
+          })
+          .map((item) => ({
+            id: item.id,
+            name: item.name,
+            mimeType: item.mimeType,
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+    if (txtFiles.length > 0) {
+      return {
+        type: 'story',
+        folders,
+        files: txtFiles,
+      };
     }
 
-    const extractedFolders = folders.map(f => {
-      if (f.mimeType === 'application/vnd.google-apps.shortcut' && f.shortcutDetails) {
-        return { id: f.shortcutDetails.targetId, name: f.name };
-      }
-      return { id: f.id, name: f.name };
-    }).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-
-    return { type: 'folders', folders: extractedFolders };
+    return {
+      type: 'folders',
+      folders,
+      files: [],
+    };
   };
 
   const loadInitialSettings = async () => {
     setLoading(true);
+    setLoadingText('Đang mở Tàng Kinh Các...');
+
     try {
-      const savedKey = await AsyncStorage.getItem('customApiKey');
-      const savedFolder = await AsyncStorage.getItem('customFolderId');
       const savedFontSize = await AsyncStorage.getItem('customFontSize');
-      
-      const activeKey = savedKey || DEFAULT_API_KEY;
-      const activeFolder = savedFolder || DEFAULT_FOLDER_ID;
-      
-      if (savedFontSize) setFontSize(parseInt(savedFontSize, 10));
-      setApiKey(activeKey);
-      setFolderId(activeFolder);
-      
-      const savedTree = await AsyncStorage.getItem(`lazyTree_${activeFolder}`);
+      if (savedFontSize) {
+        const parsed = parseInt(savedFontSize, 10);
+        if (!Number.isNaN(parsed)) setFontSize(parsed);
+      }
+
+      setFolderStack([{ id: folderId, name: '📚 Tàng Kinh Các' }]);
+
+      const cacheKey = `lazyTree_${folderId}`;
+      const savedTree = await AsyncStorage.getItem(cacheKey);
       let treeData = savedTree ? JSON.parse(savedTree) : {};
+
+      if (!treeData[folderId]) {
+        const result = await fetchContents(folderId, apiKey, true);
+
+        treeData[folderId] = {
+          type: 'folders',
+          folders: result.folders || [],
+          files: [],
+          name: '📚 Tàng Kinh Các',
+        };
+
+        await AsyncStorage.setItem(cacheKey, JSON.stringify(treeData));
+      }
+
       setLocalTree(treeData);
-      
-      setFolderStack([{ id: activeFolder, name: '📚 Tàng Kinh Các' }]);
-
-      if (!treeData[activeFolder]) {
-        const result = await fetchContents(activeFolder, activeKey);
-        treeData[activeFolder] = {
-          type: result.type,
-          folders: result.folders || [],
-          files: result.files || [],
-          name: '📚 Tàng Kinh Các'
-        };
-        await AsyncStorage.setItem(`lazyTree_${activeFolder}`, JSON.stringify(treeData));
-        setLocalTree({ ...treeData });
-      }
-
-      if (treeData[activeFolder].type === 'story') {
-        setCurrentBook({ id: activeFolder, name: 'Truyện gốc' });
-        setFiles(treeData[activeFolder].files);
-        setHasStartedReading(false);
-        setTextContent('');
-        
-        const savedIndex = await AsyncStorage.getItem(`lastRead_${activeFolder}`);
-        let initialIdx = 0;
-        if (savedIndex) {
-          const parsedIdx = parseInt(savedIndex, 10);
-          if (parsedIdx >= 0 && parsedIdx < treeData[activeFolder].files.length) initialIdx = parsedIdx;
-        }
-        setCurrentIndex(initialIdx); 
-        setJumpText((initialIdx + 1).toString());
-        setTocPage(Math.floor(initialIdx / ITEMS_PER_PAGE));
-        setShowToc(true);
-      }
+      setCurrentItems(treeData[folderId]?.folders || []);
+      setSelectedIndex(0);
+      setScreen(SCREEN_LIBRARY);
     } catch (e) {
-      alert("Lỗi khởi tạo: " + e.message);
-      setFolderStack([{ id: DEFAULT_FOLDER_ID, name: '📚 Tàng Kinh Các' }]);
+      alert('Lỗi khởi tạo: ' + e.message);
     }
+
     setLoading(false);
   };
 
-  const handleRefreshCurrent = async () => {
-    setLoading(true);
-    try {
-      const currentTargetId = currentBook ? currentBook.id : (folderStack[folderStack.length - 1]?.id || folderId);
-      const currentTargetName = currentBook ? currentBook.name : (folderStack[folderStack.length - 1]?.name || '📚 Tàng Kinh Các');
-      
-      const result = await fetchContents(currentTargetId, apiKey);
-      
-      const updatedTree = { ...localTree };
-      updatedTree[currentTargetId] = {
-        type: result.type,
-        folders: result.folders || [],
-        files: result.files || [],
-        name: currentTargetName
-      };
-      
-      await AsyncStorage.setItem(`lazyTree_${folderId}`, JSON.stringify(updatedTree));
-      setLocalTree(updatedTree);
-      
-      if (currentBook && currentTargetId === currentBook.id) {
-        setFiles(result.files);
-        if (currentIndex >= result.files.length) {
-          setCurrentIndex(0);
-          setJumpText('1');
-        }
-        alert("Đã làm mới danh sách chương của truyện này!");
-      } else {
-        alert("Đã làm mới riêng mục này thành công!");
-      }
-    } catch (e) {
-      alert("Lỗi khi tải lại mục: " + e.message);
-    }
-    setLoading(false);
+  const saveTree = async (newTree) => {
+    setLocalTree(newTree);
+    await AsyncStorage.setItem(`lazyTree_${folderId}`, JSON.stringify(newTree));
   };
 
-  const handleItemClick = async (item) => {
+  const openFolder = async (item) => {
+    if (!item) return;
+
     const cachedNode = localTree[item.id];
-    
-    if (cachedNode) {
-      if (cachedNode.type === 'story') {
-        setCurrentBook(item);
-        setShowMenu(false);
-        setFiles(cachedNode.files);
-        setHasStartedReading(false);
-        setTextContent('');
 
-        const savedIndex = await AsyncStorage.getItem(`lastRead_${item.id}`);
-        let initialIdx = 0;
-        if (savedIndex) {
-          const parsedIdx = parseInt(savedIndex, 10);
-          if (parsedIdx >= 0 && parsedIdx < cachedNode.files.length) initialIdx = parsedIdx;
-        }
-        setCurrentIndex(initialIdx); 
-        setJumpText((initialIdx + 1).toString());
-        setTocPage(Math.floor(initialIdx / ITEMS_PER_PAGE));
-        setShowToc(true);
-      } else {
-        setFolderStack(prev => [...prev, { id: item.id, name: item.name }]);
-        setSearchQuery('');
-      }
-    } else {
-      setLoading(true);
-      try {
-        const result = await fetchContents(item.id, apiKey);
-        const updatedTree = { ...localTree };
-        updatedTree[item.id] = {
+    if (cachedNode) {
+      openNodeFromCache(item, cachedNode);
+      return;
+    }
+
+    setLoading(true);
+    setLoadingText(`Đang mở ${item.name}...`);
+
+    try {
+      const result = await fetchContents(item.id, apiKey, false);
+
+      const updatedTree = {
+        ...localTree,
+        [item.id]: {
           type: result.type,
           folders: result.folders || [],
           files: result.files || [],
-          name: item.name
-        };
-        
-        await AsyncStorage.setItem(`lazyTree_${folderId}`, JSON.stringify(updatedTree));
-        setLocalTree(updatedTree);
+          name: item.name,
+        },
+      };
 
-        if (result.type === 'story') {
-          setCurrentBook(item);
-          setShowMenu(false);
-          setFiles(result.files);
-          setHasStartedReading(false);
-          setTextContent('');
+      await saveTree(updatedTree);
 
-          const savedIndex = await AsyncStorage.getItem(`lastRead_${item.id}`);
-          let initialIdx = 0;
-          if (savedIndex) {
-            const parsedIdx = parseInt(savedIndex, 10);
-            if (parsedIdx >= 0 && parsedIdx < result.files.length) initialIdx = parsedIdx;
-          }
-          setCurrentIndex(initialIdx); 
-          setJumpText((initialIdx + 1).toString());
-          setTocPage(Math.floor(initialIdx / ITEMS_PER_PAGE));
-          setShowToc(true);
-        } else {
-          setFolderStack(prev => [...prev, { id: item.id, name: item.name }]);
-          setSearchQuery('');
-        }
-      } catch (error) {
-        alert("Lỗi tải mục: " + error.message);
-      }
-      setLoading(false);
+      openNodeFromCache(item, updatedTree[item.id]);
+    } catch (e) {
+      alert('Lỗi tải mục: ' + e.message);
     }
+
+    setLoading(false);
   };
 
-  const loadContent = async (file) => {
+  const openNodeFromCache = async (item, node) => {
+    if (node.type === 'story') {
+      const storyFiles = node.files || [];
+
+      setCurrentBook({ id: item.id, name: item.name });
+      setChapters(storyFiles);
+      setTextContent('');
+
+      const savedIndexRaw = await AsyncStorage.getItem(`lastRead_${item.id}`);
+      let savedIndex = parseInt(savedIndexRaw || '0', 10);
+      if (Number.isNaN(savedIndex)) savedIndex = 0;
+      savedIndex = Math.max(0, Math.min(savedIndex, storyFiles.length - 1));
+
+      setCurrentChapterIndex(savedIndex);
+      setSelectedGroupIndex(getGroupIndexForChapter(savedIndex));
+      setSelectedIndex(getGroupIndexForChapter(savedIndex));
+      setSelectedChapterIndex(savedIndex);
+      setJumpText(String(savedIndex + 1));
+      setScreen(SCREEN_TOC_GROUPS);
+      return;
+    }
+
+    setFolderStack((prev) => [...prev, { id: item.id, name: item.name }]);
+    setCurrentItems(node.folders || []);
+    setSelectedIndex(0);
+    setScreen(SCREEN_LIBRARY);
+  };
+
+  const refreshCurrent = async () => {
+    setLoading(true);
+
+    try {
+      if (currentBook) {
+        setLoadingText(`Đang tải lại ${currentBook.name}...`);
+
+        const result = await fetchContents(currentBook.id, apiKey, false);
+        const updatedTree = {
+          ...localTree,
+          [currentBook.id]: {
+            type: result.type,
+            folders: result.folders || [],
+            files: result.files || [],
+            name: currentBook.name,
+          },
+        };
+
+        await saveTree(updatedTree);
+
+        const newFiles = result.files || [];
+        setChapters(newFiles);
+
+        const safeIndex = Math.min(currentChapterIndex, Math.max(0, newFiles.length - 1));
+        setCurrentChapterIndex(safeIndex);
+        setSelectedGroupIndex(getGroupIndexForChapter(safeIndex));
+        setSelectedIndex(getGroupIndexForChapter(safeIndex));
+        setSelectedChapterIndex(safeIndex);
+
+        setScreen(SCREEN_TOC_GROUPS);
+      } else {
+        const currentFolder = folderStack[folderStack.length - 1] || {
+          id: folderId,
+          name: '📚 Tàng Kinh Các',
+        };
+
+        const isRoot = currentFolder.id === folderId;
+        setLoadingText(`Đang tải lại ${currentFolder.name}...`);
+
+        const result = await fetchContents(currentFolder.id, apiKey, isRoot);
+
+        const updatedTree = {
+          ...localTree,
+          [currentFolder.id]: {
+            type: isRoot ? 'folders' : result.type,
+            folders: result.folders || [],
+            files: isRoot ? [] : result.files || [],
+            name: currentFolder.name,
+          },
+        };
+
+        await saveTree(updatedTree);
+        setCurrentItems(updatedTree[currentFolder.id].folders || []);
+        setSelectedIndex(0);
+        setScreen(SCREEN_LIBRARY);
+      }
+    } catch (e) {
+      alert('Lỗi tải lại: ' + e.message);
+    }
+
+    setLoading(false);
+  };
+
+  const loadContent = async (file, index) => {
     if (!file) return;
+
     setLoadingContent(true);
-    scrollY.current = 0; 
+    setTextContent('');
+    scrollY.current = 0;
     scrollViewRef.current?.scrollTo({ y: 0, animated: false });
 
-    const isKindle = file.name.toLowerCase().endsWith('.mobi') || file.name.toLowerCase().endsWith('.azw3');
-
-    if (isKindle) {
-      setNeedsConversion(true);
-      setTextContent('');
-      setLoadingContent(false);
-      return; 
-    }
-
-    setNeedsConversion(false);
-
-    if (file.mimeType === 'text/plain') {
-      try {
-        let url = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&key=${apiKey}`;
-        const response = await fetch(url);
-        if (!response.ok) {
-          setTextContent("Trạm trung chuyển báo lỗi hoặc file không hợp lệ anh hai ơi!");
-        } else {
-          const text = await response.text();
-          setTextContent(text);
-        }
-      } catch (error) {
-        setTextContent("Lỗi mạng không tải được nội dung.");
-      }
-    } else {
-      setTextContent(''); 
-    }
-    setLoadingContent(false);
-  };
-
-  const handleConvert = async () => {
-    const file = files[currentIndex];
-    if (!file) return;
-    
-    setNeedsConversion(false);
-    setLoadingContent(true);
-    
     try {
-      const url = `${PROXY_SERVER_URL}/convert?fileId=${file.id}&apiKey=${apiKey}`;
+      const url = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&key=${apiKey}`;
       const response = await fetch(url);
+
       if (!response.ok) {
-        setTextContent("Trạm trung chuyển báo lỗi rồi anh hai ơi!");
+        const errorText = await response.text();
+        setTextContent(`Lỗi tải chương:\n${errorText}`);
       } else {
         const text = await response.text();
         setTextContent(text);
       }
-    } catch (error) {
-      setTextContent("Lỗi mạng không nhờ trạm Convert được.");
+
+      if (currentBook) {
+        await AsyncStorage.setItem(`lastRead_${currentBook.id}`, String(index));
+      }
+    } catch (e) {
+      setTextContent('Lỗi mạng không tải được nội dung.');
     }
+
     setLoadingContent(false);
   };
 
-  const updateProgress = async (index) => {
-    if (currentBook) {
-      try { await AsyncStorage.setItem(`lastRead_${currentBook.id}`, index.toString()); } 
-      catch (e) {}
+  const openChapter = async (index) => {
+    if (index < 0 || index >= chapters.length) return;
+
+    setScreen(SCREEN_READER);
+    setCurrentChapterIndex(index);
+    setSelectedChapterIndex(index);
+    setSelectedGroupIndex(getGroupIndexForChapter(index));
+    setJumpText(String(index + 1));
+    setReaderFooterVisible(true);
+
+    await loadContent(chapters[index], index);
+  };
+
+  const previousChapter = () => {
+    if (screen !== SCREEN_READER) return;
+    if (currentChapterIndex > 0) {
+      openChapter(currentChapterIndex - 1);
     }
   };
 
-  const handleScroll = (event) => { scrollY.current = event.nativeEvent.contentOffset.y; };
-
-  const handleKeyPress = (e) => {
-    const key = e.nativeEvent.key;
-    const scrollStep = Dimensions.get('window').height * 0.7; 
-
-    if (key === '1') {
-      handlePrev();
-    } else if (key === '3') {
-      handleNext();
-    } else if (key === '5' || key === 'Enter') {
-      setShowToc(false);
-      setShowMenu(prev => !prev);
-    } else if (key === '0') {
-      // Phím Go Back Smart
-      if (showMenu || showToc) {
-        setShowMenu(false);
-        setShowToc(false);
-      } else {
-        setCurrentBook(null);
-        setHasStartedReading(false);
-      }
-    } else if (key === '4') {
-      changeFontSize(-2);
-    } else if (key === '6') {
-      changeFontSize(2);
-    } else if (key === '7') {
-      // Bật Menu để lộ thanh điền nhảy chương
-      setShowMenu(true);
-    } else if (key === '9') {
-      // Bật/tắt chế độ toàn màn hình (ẩn nút menu nổi)
-      setHideFloatingBtn(prev => !prev);
-    } else if (key === 'ArrowUp' || key === 'DPadUp' || key === '2') {
-      const newOffset = Math.max(0, scrollY.current - scrollStep);
-      scrollViewRef.current?.scrollTo({ y: newOffset, animated: true });
-    } else if (key === 'ArrowDown' || key === 'DPadDown' || key === '8') {
-      const newOffset = scrollY.current + scrollStep;
-      scrollViewRef.current?.scrollTo({ y: newOffset, animated: true });
+  const nextChapter = () => {
+    if (screen !== SCREEN_READER) return;
+    if (currentChapterIndex < chapters.length - 1) {
+      openChapter(currentChapterIndex + 1);
     }
+  };
+
+  const changeFontSize = async (delta) => {
+    if (screen !== SCREEN_READER) return;
+
+    const newSize = Math.max(12, Math.min(50, fontSize + delta));
+    setFontSize(newSize);
+    await AsyncStorage.setItem('customFontSize', String(newSize));
+  };
+
+  const showJump = () => {
+    if (chapters.length === 0) return;
+    setJumpText(String(currentChapterIndex + 1));
+    setShowJumpModal(true);
   };
 
   const handleJump = () => {
     const num = parseInt(jumpText, 10);
-    if (!isNaN(num) && num >= 1 && num <= files.length) {
-      const newIdx = num - 1;
-      if (newIdx !== currentIndex) {
-        setCurrentIndex(newIdx); updateProgress(newIdx); 
-        setHasStartedReading(true);
-        loadContent(files[newIdx]);
+
+    if (Number.isNaN(num) || num < 1 || num > chapters.length) {
+      alert(`Nhập số từ 1 đến ${chapters.length}`);
+      return;
+    }
+
+    setShowJumpModal(false);
+    openChapter(num - 1);
+  };
+
+  const getGroupCount = () => {
+    if (chapters.length === 0) return 0;
+    return Math.ceil(chapters.length / CHAPTER_GROUP_SIZE);
+  };
+
+  function getGroupIndexForChapter(chapterIndex) {
+    if (chapterIndex < 0) return 0;
+    return Math.floor(chapterIndex / CHAPTER_GROUP_SIZE);
+  }
+
+  const getGroupStartIndex = (groupIndex) => {
+    return groupIndex * CHAPTER_GROUP_SIZE;
+  };
+
+  const getGroupEndIndex = (groupIndex) => {
+    const rawEnd = getGroupStartIndex(groupIndex) + CHAPTER_GROUP_SIZE - 1;
+    return Math.min(rawEnd, chapters.length - 1);
+  };
+
+  const openSelected = () => {
+    if (screen === SCREEN_LIBRARY) {
+      const item = currentItems[selectedIndex];
+      openFolder(item);
+      return;
+    }
+
+    if (screen === SCREEN_TOC_GROUPS) {
+      const groupCount = getGroupCount();
+      if (groupCount <= 0) return;
+
+      const groupIndex = Math.max(0, Math.min(selectedIndex, groupCount - 1));
+      const start = getGroupStartIndex(groupIndex);
+      const end = getGroupEndIndex(groupIndex);
+
+      setSelectedGroupIndex(groupIndex);
+
+      if (currentChapterIndex >= start && currentChapterIndex <= end) {
+        setSelectedChapterIndex(currentChapterIndex);
+      } else {
+        setSelectedChapterIndex(start);
       }
-    } else {
-      alert(`Nhập số từ 1 đến ${files.length}`);
-      setJumpText((currentIndex + 1).toString());
+
+      setScreen(SCREEN_TOC_CHAPTERS);
+      return;
+    }
+
+    if (screen === SCREEN_TOC_CHAPTERS) {
+      openChapter(selectedChapterIndex);
+      return;
+    }
+
+    if (screen === SCREEN_READER) {
+      const groupIndex = getGroupIndexForChapter(currentChapterIndex);
+      setSelectedGroupIndex(groupIndex);
+      setSelectedIndex(groupIndex);
+      setScreen(SCREEN_TOC_GROUPS);
     }
   };
 
-  const handleNext = async () => {
-    if (currentIndex < files.length - 1) {
-      const nextIdx = currentIndex + 1;
-      setCurrentIndex(nextIdx); setJumpText((nextIdx + 1).toString());
-      updateProgress(nextIdx); 
-      setHasStartedReading(true);
-      await loadContent(files[nextIdx]);
+  const moveSelection = (delta) => {
+    if (screen === SCREEN_LIBRARY) {
+      if (currentItems.length === 0) return;
+
+      setSelectedIndex((prev) => {
+        return Math.max(0, Math.min(prev + delta, currentItems.length - 1));
+      });
+      return;
+    }
+
+    if (screen === SCREEN_TOC_GROUPS) {
+      const groupCount = getGroupCount();
+      if (groupCount <= 0) return;
+
+      setSelectedIndex((prev) => {
+        const next = Math.max(0, Math.min(prev + delta, groupCount - 1));
+        setSelectedGroupIndex(next);
+        return next;
+      });
+      return;
+    }
+
+    if (screen === SCREEN_TOC_CHAPTERS) {
+      const start = getGroupStartIndex(selectedGroupIndex);
+      const end = getGroupEndIndex(selectedGroupIndex);
+
+      setSelectedChapterIndex((prev) => {
+        return Math.max(start, Math.min(prev + delta, end));
+      });
+      return;
+    }
+
+    if (screen === SCREEN_READER) {
+      const lineHeight = fontSize * 1.6;
+      const amount = lineHeight * READER_SCROLL_LINES;
+      const nextOffset = Math.max(0, scrollY.current + amount * delta);
+
+      scrollViewRef.current?.scrollTo({ y: nextOffset, animated: true });
     }
   };
 
-  const handlePrev = async () => {
-    if (currentIndex > 0) {
-      const prevIdx = currentIndex - 1;
-      setCurrentIndex(prevIdx); setJumpText((prevIdx + 1).toString());
-      updateProgress(prevIdx); 
-      setHasStartedReading(true);
-      await loadContent(files[prevIdx]);
+  const previousGroup = () => {
+    if (screen !== SCREEN_TOC_CHAPTERS) return;
+
+    if (selectedGroupIndex > 0) {
+      const newGroup = selectedGroupIndex - 1;
+      setSelectedGroupIndex(newGroup);
+      setSelectedChapterIndex(getGroupStartIndex(newGroup));
     }
   };
 
-  const saveSettings = async () => {
-    try {
-      const newKey = tempApiKey.trim() !== '' ? tempApiKey.trim() : apiKey;
-      const newFolder = tempFolderId.trim() !== '' ? tempFolderId.trim() : folderId;
-      
-      await AsyncStorage.setItem('customApiKey', newKey);
-      await AsyncStorage.setItem('customFolderId', newFolder);
-      
-      setApiKey(newKey); setFolderId(newFolder); 
-      setShowSettings(false); setCurrentBook(null); setSearchQuery('');
-      setTempApiKey(''); setTempFolderId(''); 
-      
-      setLoading(true);
-      const result = await fetchContents(newFolder, newKey);
-      let treeData = {};
-      treeData[newFolder] = {
-        type: result.type,
-        folders: result.folders || [],
-        files: result.files || [],
-        name: '📚 Tàng Kinh Các'
-      };
-      await AsyncStorage.setItem(`lazyTree_${newFolder}`, JSON.stringify(treeData));
-      setLocalTree(treeData);
-      setFolderStack([{ id: newFolder, name: '📚 Tàng Kinh Các' }]);
-      
-      if (result.type === 'story') {
-        setCurrentBook({ id: newFolder, name: 'Truyện gốc' });
-        setFiles(result.files);
-        setCurrentIndex(0); setJumpText('1');
-        setTocPage(0);
-        setHasStartedReading(false);
-        setTextContent('');
-        setShowToc(true);
+  const nextGroup = () => {
+    if (screen !== SCREEN_TOC_CHAPTERS) return;
+
+    const groupCount = getGroupCount();
+
+    if (selectedGroupIndex < groupCount - 1) {
+      const newGroup = selectedGroupIndex + 1;
+      setSelectedGroupIndex(newGroup);
+      setSelectedChapterIndex(getGroupStartIndex(newGroup));
+    }
+  };
+
+  const goBackSmart = () => {
+    if (showJumpModal) {
+      setShowJumpModal(false);
+      return;
+    }
+
+    if (screen === SCREEN_READER) {
+      const groupIndex = getGroupIndexForChapter(currentChapterIndex);
+      setSelectedGroupIndex(groupIndex);
+      setSelectedChapterIndex(currentChapterIndex);
+      setScreen(SCREEN_TOC_CHAPTERS);
+      return;
+    }
+
+    if (screen === SCREEN_TOC_CHAPTERS) {
+      setSelectedIndex(selectedGroupIndex);
+      setScreen(SCREEN_TOC_GROUPS);
+      return;
+    }
+
+    if (screen === SCREEN_TOC_GROUPS) {
+      setCurrentBook(null);
+      setChapters([]);
+      setTextContent('');
+      setSelectedGroupIndex(0);
+      setSelectedChapterIndex(0);
+
+      if (folderStack.length > 1) {
+        const newStack = folderStack.slice(0, -1);
+        setFolderStack(newStack);
+
+        const parent = newStack[newStack.length - 1];
+        const parentNode = localTree[parent.id] || { folders: [] };
+        setCurrentItems(parentNode.folders || []);
+        setSelectedIndex(0);
+        setScreen(SCREEN_LIBRARY);
+      } else {
+        setCurrentItems(localTree[folderId]?.folders || []);
+        setSelectedIndex(0);
+        setScreen(SCREEN_LIBRARY);
       }
-      setLoading(false);
-    } catch (e) { alert('Lỗi lưu cài đặt!'); setLoading(false); }
+
+      return;
+    }
+
+    if (screen === SCREEN_LIBRARY) {
+      if (folderStack.length > 1) {
+        const newStack = folderStack.slice(0, -1);
+        setFolderStack(newStack);
+
+        const parent = newStack[newStack.length - 1];
+        const parentNode = localTree[parent.id] || { folders: [] };
+
+        setCurrentItems(parentNode.folders || []);
+        setSelectedIndex(0);
+      } else {
+        BackHandler.exitApp();
+      }
+    }
   };
 
-  const changeFontSize = async (delta) => {
-    const newSize = fontSize + delta;
-    if (newSize >= 12 && newSize <= 50) {
-      setFontSize(newSize); await AsyncStorage.setItem('customFontSize', newSize.toString());
+  const handleKeyPress = (e) => {
+    const key = e.nativeEvent.key;
+
+    if (key === '2' || key === 'ArrowUp' || key === 'DPadUp') {
+      moveSelection(-1);
+      return;
     }
+
+    if (key === '8' || key === 'ArrowDown' || key === 'DPadDown') {
+      moveSelection(1);
+      return;
+    }
+
+    if (key === '5' || key === 'Enter') {
+      openSelected();
+      return;
+    }
+
+    if (key === '0' || key === 'Backspace' || key === 'Escape') {
+      goBackSmart();
+      return;
+    }
+
+    if (key === '1') {
+      previousChapter();
+      return;
+    }
+
+    if (key === '3') {
+      nextChapter();
+      return;
+    }
+
+    if (key === '4') {
+      if (screen === SCREEN_READER) changeFontSize(-2);
+      if (screen === SCREEN_TOC_CHAPTERS) previousGroup();
+      return;
+    }
+
+    if (key === '6') {
+      if (screen === SCREEN_READER) changeFontSize(2);
+      else if (screen === SCREEN_TOC_CHAPTERS) nextGroup();
+      else refreshCurrent();
+      return;
+    }
+
+    if (key === '7') {
+      showJump();
+      return;
+    }
+
+    if (key === '9') {
+      if (screen === SCREEN_READER) {
+        setReaderFooterVisible((prev) => !prev);
+      }
+    }
+  };
+
+  const handleScroll = (event) => {
+    scrollY.current = event.nativeEvent.contentOffset.y;
+  };
+
+  const renderHiddenInput = () => {
+    return (
+      <TextInput
+        ref={hiddenInputRef}
+        style={styles.hiddenInput}
+        autoFocus
+        showSoftInputOnFocus={false}
+        caretHidden
+        inputMode="none"
+        onKeyPress={handleKeyPress}
+        value=""
+        onChangeText={() => {}}
+      />
+    );
   };
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#007BFF" />
-        <Text style={{ marginTop: 10, color: '#555' }}>Tèo đang mở kho sách...</Text>
-      </View>
-    );
-  }
-
-  // --- MÀN HÌNH TỦ SÁCH ---
-  if (!currentBook) {
-    const currentStackItem = folderStack[folderStack.length - 1] || { id: folderId, name: '📚 Tàng Kinh Các' };
-    const currentNode = localTree[currentStackItem.id] || { folders: [] };
-    const displayFolders = currentNode.folders || [];
-    const filteredBooks = searchQuery.trim() === '' 
-      ? displayFolders 
-      : displayFolders.filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase()));
-
-    return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.headerBar}>
-          {folderStack.length > 1 && (
-            <TouchableOpacity onPress={() => { setFolderStack(prev => prev.slice(0, -1)); setSearchQuery(''); }} style={{paddingRight: 15}}>
-              <Text style={{ fontSize: 22, color: '#007BFF' }}>⬅️</Text>
-            </TouchableOpacity>
-          )}
-          <Text style={[styles.headerTitle, {flex: 1}]} numberOfLines={1}>{currentStackItem.name}</Text>
-          
-          <TouchableOpacity onPress={handleRefreshCurrent} style={{paddingHorizontal: 10}}>
-            <Text style={{ fontSize: 22 }}>🔄</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity onPress={() => setShowSettings(true)} style={{paddingLeft: 10}}>
-            <Text style={{ fontSize: 22 }}>⚙️</Text>
-          </TouchableOpacity>
+        {renderHiddenInput()}
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color="#333333" />
+          <Text style={styles.loadingText}>{loadingText}</Text>
         </View>
-
-        <TextInput 
-          style={styles.searchBar} 
-          placeholder="🔍 Tìm tên thư mục hoặc truyện..." 
-          value={searchQuery} 
-          onChangeText={setSearchQuery} 
-        />
-
-        <FlatList
-          data={filteredBooks} keyExtractor={(item) => item.id} contentContainerStyle={{ paddingBottom: 20 }}
-          ListEmptyComponent={<Text style={styles.emptyText}>Mục này trống hoặc cần ấn 🔄 để tải dữ liệu anh hai ơi!</Text>}
-          renderItem={({ item }) => (
-            <TouchableOpacity style={styles.bookItem} onPress={() => handleItemClick(item)}>
-              <Text style={styles.bookIcon}>📁</Text>
-              <Text style={styles.bookName} numberOfLines={2}>{item.name}</Text>
-              <Text style={styles.arrowIcon}>›</Text>
-            </TouchableOpacity>
-          )}
-        />
-        
-        <Modal visible={showSettings} animationType="slide" transparent={true}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Cài đặt Hệ thống</Text>
-              
-              <Text style={styles.hintText}>* Bỏ trống nếu muốn giữ nguyên</Text>
-              <TextInput style={styles.settingInput} placeholder="Nhập API Key mới..." value={tempApiKey} onChangeText={setTempApiKey} />
-              <TextInput style={styles.settingInput} placeholder="Nhập Folder ID tổng mới..." value={tempFolderId} onChangeText={setTempFolderId} />
-              
-              <View style={[styles.fontAdjuster, {marginTop: 5, marginBottom: 15}]}>
-                <Text style={styles.fontLabel}>Cỡ chữ đọc truyện:</Text>
-                <View style={styles.fontControls}>
-                  <TouchableOpacity style={styles.fontBtn} onPress={() => changeFontSize(-2)}><Text style={styles.fontBtnText}>-</Text></TouchableOpacity>
-                  <Text style={styles.fontValue}>{fontSize}</Text>
-                  <TouchableOpacity style={styles.fontBtn} onPress={() => changeFontSize(2)}><Text style={styles.fontBtnText}>+</Text></TouchableOpacity>
-                </View>
-              </View>
-
-              <View style={styles.modalActions}>
-                <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#6c757d'}]} onPress={() => { setShowSettings(false); setTempApiKey(''); setTempFolderId(''); }}><Text style={styles.btnText}>Đóng</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#28a745'}]} onPress={saveSettings}><Text style={styles.btnText}>Lưu</Text></TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
       </SafeAreaView>
     );
   }
 
-  const currentFile = files[currentIndex];
-  const totalTocPages = Math.ceil(files.length / ITEMS_PER_PAGE);
-  const currentTocList = files.slice(tocPage * ITEMS_PER_PAGE, (tocPage + 1) * ITEMS_PER_PAGE);
-  
-  const isTextBased = currentFile && (currentFile.mimeType === 'text/plain' || currentFile.name.toLowerCase().endsWith('.mobi') || currentFile.name.toLowerCase().endsWith('.azw3'));
+  const currentFolderName = folderStack[folderStack.length - 1]?.name || '📚 Tàng Kinh Các';
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.contentArea}>
-        
-        <TextInput
-          ref={hiddenInputRef}
-          style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}
-          autoFocus={true}
-          showSoftInputOnFocus={false} 
-          caretHidden={true}
-          inputMode="none" 
-          onKeyPress={handleKeyPress}
-          value=""
-          onChangeText={() => {}} 
+      {renderHiddenInput()}
+
+      {screen === SCREEN_LIBRARY && (
+        <LibraryScreen
+          title={currentFolderName}
+          items={currentItems}
+          selectedIndex={selectedIndex}
+          onPressItem={(item, index) => {
+            setSelectedIndex(index);
+            openFolder(item);
+          }}
+          onRefresh={refreshCurrent}
+          onBack={goBackSmart}
         />
-
-        {loadingContent ? (
-          <ActivityIndicator size="large" color="#007BFF" />
-        ) : needsConversion ? (
-          <View style={styles.center}>
-            <Text style={{ fontSize: 16, marginBottom: 20, textAlign: 'center', paddingHorizontal: 20, color: '#555' }}>
-              Chương này là file {currentFile?.name.split('.').pop()}, anh hai ấn nút Convert để Tèo dịch ra chữ nha!
-            </Text>
-            <TouchableOpacity style={styles.convertBtn} onPress={handleConvert}>
-              <Text style={styles.convertBtnText}>🚀 Convert & Đọc Ngay</Text>
-            </TouchableOpacity>
-          </View>
-        ) : isTextBased ? (
-          <ScrollView 
-            ref={scrollViewRef} 
-            onScroll={handleScroll} 
-            scrollEventThrottle={16} 
-            style={styles.textContainer}
-          >
-            <Text style={[styles.textContent, { fontSize: fontSize, lineHeight: fontSize * 1.6 }]}>{textContent}</Text>
-          </ScrollView>
-        ) : currentFile ? (
-          <Pdf source={{ uri: `https://www.googleapis.com/drive/v3/files/${currentFile.id}?alt=media&key=${apiKey}` }} style={styles.pdf} onError={(e) => console.log(e)} />
-        ) : (
-          <Text style={{textAlign: 'center'}}>Không có nội dung</Text>
-        )}
-
-        {/* Nút nổi chỉ hiện khi cờ hideFloatingBtn là false */}
-        {!showMenu && !showToc && hasStartedReading && !hideFloatingBtn && (
-          <TouchableOpacity style={styles.floatingBtn} onPress={() => setShowMenu(true)}>
-            <Text style={styles.floatingBtnText}>❖</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {showMenu && (
-        <View style={styles.bottomBar}>
-          <TouchableOpacity onPress={() => { setCurrentBook(null); setShowMenu(false); setHasStartedReading(false); }} style={styles.iconButton}>
-            <Text style={styles.iconText}>⬅️</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.button, currentIndex === 0 && styles.disabledBtn]} onPress={handlePrev} disabled={currentIndex === 0}>
-            <Text style={styles.btnText}>{'<'}</Text>
-          </TouchableOpacity>
-          <View style={styles.centerNav}>
-            <Text style={styles.fileTitle} numberOfLines={1}>{currentFile ? currentFile.name : 'Đang tải...'}</Text>
-            <View style={styles.jumpContainer}>
-              <TextInput style={styles.jumpInput} keyboardType="numeric" value={jumpText} onChangeText={setJumpText} />
-              <Text style={styles.jumpLabel}>/ {files.length}</Text>
-              <TouchableOpacity style={styles.goButton} onPress={handleJump}><Text style={styles.goBtnText}>Đi</Text></TouchableOpacity>
-            </View>
-          </View>
-          <TouchableOpacity style={[styles.button, currentIndex === files.length - 1 && styles.disabledBtn]} onPress={handleNext} disabled={currentIndex === files.length - 1}>
-            <Text style={styles.btnText}>{'>'}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => setShowToc(true)} style={styles.iconButton}>
-            <Text style={styles.iconText}>☰</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => setShowMenu(false)} style={styles.iconButton}>
-            <Text style={{fontSize: 24, color: '#dc3545'}}>×</Text>
-          </TouchableOpacity>
-        </View>
       )}
 
-      <Modal visible={showToc} animationType="slide" transparent={true}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { height: '90%', width: '98%', padding: 10 }]}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, paddingHorizontal: 5 }}>
-              <Text style={styles.modalTitle}>Mục lục ({tocPage + 1}/{totalTocPages || 1})</Text>
-              
-              <TouchableOpacity onPress={handleRefreshCurrent} style={{ backgroundColor: '#28a745', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 4 }}>
-                <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>🔄 Tải lại chương</Text>
-              </TouchableOpacity>
-            </View>
-            
-            <FlatList
-              data={currentTocList}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item, index }) => {
-                const globalIndex = tocPage * ITEMS_PER_PAGE + index;
-                const isCurrent = globalIndex === currentIndex;
-                return (
-                  <TouchableOpacity style={[styles.tocItem, isCurrent && styles.tocItemActive]} onPress={() => { setCurrentIndex(globalIndex); setJumpText((globalIndex + 1).toString()); updateProgress(globalIndex); setHasStartedReading(true); loadContent(files[globalIndex]); setShowToc(false); setShowMenu(false); }}>
-                    <Text style={[styles.tocText, isCurrent && styles.tocTextActive]}>{item.name}</Text>
-                  </TouchableOpacity>
-                );
-              }}
-            />
-            
-            <View style={styles.tocPagination}>
-              <TouchableOpacity style={[styles.modalBtn, tocPage === 0 && styles.disabledBtn]} onPress={() => setTocPage(prev => Math.max(0, prev - 1))} disabled={tocPage === 0}><Text style={styles.btnText}>⏪ Trước</Text></TouchableOpacity>
-              <TouchableOpacity style={[styles.modalBtn, tocPage >= (totalTocPages - 1) && styles.disabledBtn]} onPress={() => setTocPage(prev => Math.min(totalTocPages - 1, prev + 1))} disabled={tocPage >= (totalTocPages - 1)}><Text style={styles.btnText}>Tiếp ⏩</Text></TouchableOpacity>
-            </View>
-            
-            <TouchableOpacity 
-              style={{backgroundColor: '#dc3545', paddingVertical: 12, borderRadius: 6, marginTop: 10, alignItems: 'center'}} 
-              onPress={() => {
-                setShowToc(false);
-                if (!hasStartedReading) {
-                  setCurrentBook(null);
-                }
-              }}
-            >
-              <Text style={styles.btnText}>{hasStartedReading ? 'Đóng mục lục' : 'Quay lại thư mục'}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {screen === SCREEN_TOC_GROUPS && (
+        <TocGroupsScreen
+          bookName={currentBook?.name || 'Mục lục'}
+          groupCount={getGroupCount()}
+          selectedIndex={selectedIndex}
+          getGroupStartIndex={getGroupStartIndex}
+          getGroupEndIndex={getGroupEndIndex}
+          onPressGroup={(groupIndex) => {
+            setSelectedIndex(groupIndex);
+            setSelectedGroupIndex(groupIndex);
+            const start = getGroupStartIndex(groupIndex);
+            const end = getGroupEndIndex(groupIndex);
+
+            if (currentChapterIndex >= start && currentChapterIndex <= end) {
+              setSelectedChapterIndex(currentChapterIndex);
+            } else {
+              setSelectedChapterIndex(start);
+            }
+
+            setScreen(SCREEN_TOC_CHAPTERS);
+          }}
+          onRefresh={refreshCurrent}
+          onBack={goBackSmart}
+        />
+      )}
+
+      {screen === SCREEN_TOC_CHAPTERS && (
+        <TocChaptersScreen
+          bookName={currentBook?.name || 'Mục lục'}
+          chapters={chapters}
+          selectedGroupIndex={selectedGroupIndex}
+          selectedChapterIndex={selectedChapterIndex}
+          getGroupStartIndex={getGroupStartIndex}
+          getGroupEndIndex={getGroupEndIndex}
+          onPressChapter={(chapterIndex) => {
+            setSelectedChapterIndex(chapterIndex);
+            openChapter(chapterIndex);
+          }}
+          onBack={goBackSmart}
+        />
+      )}
+
+      {screen === SCREEN_READER && (
+        <ReaderScreen
+          textContent={textContent}
+          fontSize={fontSize}
+          loadingContent={loadingContent}
+          scrollViewRef={scrollViewRef}
+          handleScroll={handleScroll}
+          footerVisible={readerFooterVisible}
+        />
+      )}
+
+      <JumpModal
+        visible={showJumpModal}
+        jumpText={jumpText}
+        setJumpText={setJumpText}
+        max={chapters.length}
+        onCancel={() => setShowJumpModal(false)}
+        onGo={handleJump}
+      />
     </SafeAreaView>
   );
 }
 
+function LibraryScreen({ title, items, selectedIndex, onPressItem, onRefresh, onBack }) {
+  return (
+    <View style={styles.screen}>
+      <View style={styles.headerBar}>
+        <TouchableOpacity onPress={onBack} style={styles.headerButton}>
+          <Text style={styles.headerButtonText}>←</Text>
+        </TouchableOpacity>
+
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {title}
+        </Text>
+
+        <TouchableOpacity onPress={onRefresh} style={styles.headerButton}>
+          <Text style={styles.headerButtonText}>↻</Text>
+        </TouchableOpacity>
+      </View>
+
+      <FlatList
+        data={items}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listContent}
+        ListEmptyComponent={
+          <Text style={styles.emptyText}>Mục này trống hoặc không có folder/truyện .txt</Text>
+        }
+        renderItem={({ item, index }) => {
+          const active = index === selectedIndex;
+
+          return (
+            <TouchableOpacity
+              style={[styles.rowItem, active && styles.rowItemActive]}
+              onPress={() => onPressItem(item, index)}
+            >
+              <Text style={[styles.rowText, active && styles.rowTextActive]} numberOfLines={2}>
+                {active ? '➤ ' : '   '}📁 {item.name}
+              </Text>
+            </TouchableOpacity>
+          );
+        }}
+      />
+
+      <Footer text="2/8 chọn · 5 mở · 0 lại · 6 tải" />
+    </View>
+  );
+}
+
+function TocGroupsScreen({
+  bookName,
+  groupCount,
+  selectedIndex,
+  getGroupStartIndex,
+  getGroupEndIndex,
+  onPressGroup,
+  onRefresh,
+  onBack,
+}) {
+  const groups = Array.from({ length: groupCount }, (_, index) => index);
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.headerBar}>
+        <TouchableOpacity onPress={onBack} style={styles.headerButton}>
+          <Text style={styles.headerButtonText}>←</Text>
+        </TouchableOpacity>
+
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {bookName} - Cụm chương
+        </Text>
+
+        <TouchableOpacity onPress={onRefresh} style={styles.headerButton}>
+          <Text style={styles.headerButtonText}>↻</Text>
+        </TouchableOpacity>
+      </View>
+
+      <FlatList
+        data={groups}
+        keyExtractor={(item) => String(item)}
+        contentContainerStyle={styles.listContent}
+        ListEmptyComponent={<Text style={styles.emptyText}>Không có chương .txt</Text>}
+        renderItem={({ item }) => {
+          const start = getGroupStartIndex(item) + 1;
+          const end = getGroupEndIndex(item) + 1;
+          const active = item === selectedIndex;
+
+          return (
+            <TouchableOpacity
+              style={[styles.rowItem, active && styles.rowItemActive]}
+              onPress={() => onPressGroup(item)}
+            >
+              <Text style={[styles.rowText, active && styles.rowTextActive]}>
+                {active ? '➤ ' : '   '}📚 Chương {start} - {end}
+              </Text>
+            </TouchableOpacity>
+          );
+        }}
+      />
+
+      <Footer text="2/8 cụm · 5 mở · 7 nhảy · 0 lại · 6 tải" />
+    </View>
+  );
+}
+
+function TocChaptersScreen({
+  bookName,
+  chapters,
+  selectedGroupIndex,
+  selectedChapterIndex,
+  getGroupStartIndex,
+  getGroupEndIndex,
+  onPressChapter,
+  onBack,
+}) {
+  const start = getGroupStartIndex(selectedGroupIndex);
+  const end = getGroupEndIndex(selectedGroupIndex);
+  const groupChapters = chapters.slice(start, end + 1);
+
+  return (
+    <View style={styles.screen}>
+      <View style={styles.headerBar}>
+        <TouchableOpacity onPress={onBack} style={styles.headerButton}>
+          <Text style={styles.headerButtonText}>←</Text>
+        </TouchableOpacity>
+
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {bookName} - {start + 1} đến {end + 1}
+        </Text>
+      </View>
+
+      <FlatList
+        data={groupChapters}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listContent}
+        renderItem={({ item, index }) => {
+          const globalIndex = start + index;
+          const active = globalIndex === selectedChapterIndex;
+
+          return (
+            <TouchableOpacity
+              style={[styles.rowItem, active && styles.rowItemActive]}
+              onPress={() => onPressChapter(globalIndex)}
+            >
+              <Text style={[styles.rowText, active && styles.rowTextActive]} numberOfLines={2}>
+                {active ? '➤ ' : '   '}
+                {globalIndex + 1}. {item.name}
+              </Text>
+            </TouchableOpacity>
+          );
+        }}
+      />
+
+      <Footer text="2/8 chọn · 5 đọc · 4/6 cụm · 7 nhảy · 0 lại" />
+    </View>
+  );
+}
+
+function ReaderScreen({
+  textContent,
+  fontSize,
+  loadingContent,
+  scrollViewRef,
+  handleScroll,
+  footerVisible,
+}) {
+  return (
+    <View style={styles.screen}>
+      <View style={styles.readerArea}>
+        {loadingContent ? (
+          <ActivityIndicator size="large" color="#333333" />
+        ) : (
+          <ScrollView
+            ref={scrollViewRef}
+            style={styles.textContainer}
+            onScroll={handleScroll}
+            scrollEventThrottle={16}
+          >
+            <Text
+              style={[
+                styles.textContent,
+                {
+                  fontSize,
+                  lineHeight: fontSize * 1.6,
+                },
+              ]}
+            >
+              {textContent}
+            </Text>
+          </ScrollView>
+        )}
+      </View>
+
+      {footerVisible ? (
+        <Footer text="1/3 chương · 2/8 cuộn · 4/6 font · 5 ML · 7 nhảy · 9 ẩn · 0 lại" />
+      ) : (
+        <View style={styles.footerHidden} />
+      )}
+    </View>
+  );
+}
+
+function JumpModal({ visible, jumpText, setJumpText, max, onCancel, onGo }) {
+  return (
+    <Modal visible={visible} animationType="fade" transparent>
+      <View style={styles.modalOverlay}>
+        <View style={styles.jumpBox}>
+          <Text style={styles.jumpTitle}>Nhảy tới chương</Text>
+          <Text style={styles.jumpHint}>Nhập số từ 1 đến {max}</Text>
+
+          <TextInput
+            style={styles.jumpInputLarge}
+            keyboardType="numeric"
+            value={jumpText}
+            onChangeText={setJumpText}
+            autoFocus
+            selectTextOnFocus
+          />
+
+          <View style={styles.jumpActions}>
+            <TouchableOpacity style={[styles.jumpButton, styles.cancelButton]} onPress={onCancel}>
+              <Text style={styles.jumpButtonText}>Huỷ</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={[styles.jumpButton, styles.goButton]} onPress={onGo}>
+              <Text style={styles.jumpButtonText}>Đi</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function Footer({ text }) {
+  return (
+    <View style={styles.footer}>
+      <Text style={styles.footerText} numberOfLines={1}>
+        {text}
+      </Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#ffffff' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  headerBar: { flexDirection: 'row', alignItems: 'center', padding: 15, backgroundColor: '#f8f9fa', borderBottomWidth: 1, borderColor: '#dee2e6' },
-  headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#212529' },
-  searchBar: { margin: 12, padding: 10, borderWidth: 1, borderColor: '#ced4da', borderRadius: 8, backgroundColor: '#f8f9fa', fontSize: 14 },
-  emptyText: { textAlign: 'center', marginTop: 30, color: '#6c757d', paddingHorizontal: 20 },
-  bookItem: { flexDirection: 'row', alignItems: 'center', padding: 15, borderBottomWidth: 1, borderBottomColor: '#eee', backgroundColor: '#fff' },
-  bookIcon: { fontSize: 20, marginRight: 12 },
-  bookName: { flex: 1, fontSize: 16, fontWeight: '600', color: '#333' },
-  arrowIcon: { fontSize: 22, color: '#ccc', marginLeft: 10 },
-  contentArea: { flex: 1, backgroundColor: '#ffffff', justifyContent: 'center' },
-  textContainer: { padding: 15 },
-  textContent: { color: '#212529', textAlign: 'justify' },
-  pdf: { flex: 1, width: Dimensions.get('window').width, height: Dimensions.get('window').height },
-  floatingBtn: { position: 'absolute', bottom: 20, right: 20, backgroundColor: 'rgba(0,0,0,0.1)', width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
-  floatingBtnText: { fontSize: 20, color: 'rgba(0,0,0,0.4)' },
-  bottomBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 5, backgroundColor: '#f8f9fa', borderTopWidth: 1, borderColor: '#dee2e6' },
-  button: { backgroundColor: '#007BFF', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 4 },
-  iconButton: { padding: 5, marginHorizontal: 2 },
-  iconText: { fontSize: 18 },
-  disabledBtn: { backgroundColor: '#6c757d' },
-  btnText: { color: '#fff', fontWeight: 'bold', fontSize: 12, textAlign: 'center' },
-  centerNav: { flex: 1, alignItems: 'center', marginHorizontal: 2 },
-  fileTitle: { fontWeight: 'bold', color: '#212529', fontSize: 12, marginBottom: 2 },
-  jumpContainer: { flexDirection: 'row', alignItems: 'center' },
-  jumpLabel: { fontSize: 10, color: '#495057', marginHorizontal: 2 },
-  jumpInput: { borderWidth: 1, borderColor: '#ced4da', borderRadius: 4, width: 35, height: 26, textAlign: 'center', fontSize: 12, backgroundColor: '#fff', padding: 0 },
-  goButton: { backgroundColor: '#28a745', paddingVertical: 4, paddingHorizontal: 6, borderRadius: 4, marginLeft: 2 },
-  goBtnText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { width: '90%', backgroundColor: '#fff', borderRadius: 8, padding: 20, elevation: 5 },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 5, textAlign: 'center' },
-  hintText: { fontSize: 12, color: '#dc3545', marginBottom: 10, textAlign: 'center', fontStyle: 'italic' },
-  settingInput: { borderWidth: 1, borderColor: '#ccc', borderRadius: 4, padding: 10, marginBottom: 10, fontSize: 14 },
-  modalActions: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
-  modalBtn: { paddingVertical: 10, paddingHorizontal: 15, borderRadius: 4, flex: 1, marginHorizontal: 5 },
-  fontAdjuster: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#f8f9fa', padding: 10, borderRadius: 4 },
-  fontLabel: { fontSize: 14, fontWeight: 'bold', color: '#495057' },
-  fontControls: { flexDirection: 'row', alignItems: 'center' },
-  fontBtn: { backgroundColor: '#007BFF', width: 35, height: 35, borderRadius: 17.5, justifyContent: 'center', alignItems: 'center' },
-  fontBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
-  fontValue: { fontSize: 16, fontWeight: 'bold', width: 30, textAlign: 'center', marginHorizontal: 10 },
-  tocItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  tocItemActive: { backgroundColor: '#e7f1ff' },
-  tocText: { fontSize: 15, color: '#333' },
-  tocTextActive: { fontWeight: 'bold', color: '#007BFF' },
-  tocPagination: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
-  convertBtn: { backgroundColor: '#ff9800', paddingVertical: 12, paddingHorizontal: 25, borderRadius: 8, elevation: 3 },
-  convertBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 }
+  container: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  screen: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  hiddenInput: {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    opacity: 0,
+    top: 0,
+    left: 0,
+    zIndex: -1,
+  },
+  center: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    marginTop: 10,
+    color: '#555555',
+    fontSize: 14,
+  },
+  headerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eeeeee',
+    backgroundColor: '#f8f8f8',
+  },
+  headerButton: {
+    width: 34,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerButtonText: {
+    fontSize: 20,
+    color: '#333333',
+    fontWeight: 'bold',
+  },
+  headerTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#222222',
+  },
+  listContent: {
+    paddingBottom: 8,
+  },
+  rowItem: {
+    paddingVertical: 11,
+    paddingHorizontal: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eeeeee',
+    backgroundColor: '#ffffff',
+  },
+  rowItemActive: {
+    backgroundColor: '#e7f1ff',
+  },
+  rowText: {
+    fontSize: 15,
+    color: '#222222',
+  },
+  rowTextActive: {
+    color: '#0057c2',
+    fontWeight: 'bold',
+  },
+  emptyText: {
+    textAlign: 'center',
+    color: '#777777',
+    marginTop: 30,
+    paddingHorizontal: 20,
+  },
+  readerArea: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  textContainer: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  textContent: {
+    color: '#111111',
+    textAlign: 'justify',
+  },
+  footer: {
+    paddingVertical: 2,
+    paddingHorizontal: 4,
+    borderTopWidth: 1,
+    borderTopColor: '#eeeeee',
+    backgroundColor: '#fafafa',
+  },
+  footerText: {
+    fontSize: 9,
+    color: '#666666',
+    textAlign: 'center',
+  },
+  footerHidden: {
+    height: 1,
+    backgroundColor: '#ffffff',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  jumpBox: {
+    width: '86%',
+    backgroundColor: '#ffffff',
+    padding: 16,
+    borderRadius: 8,
+  },
+  jumpTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 6,
+    color: '#222222',
+  },
+  jumpHint: {
+    fontSize: 13,
+    textAlign: 'center',
+    color: '#666666',
+    marginBottom: 10,
+  },
+  jumpInputLarge: {
+    borderWidth: 1,
+    borderColor: '#cccccc',
+    borderRadius: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    fontSize: 18,
+    textAlign: 'center',
+    marginBottom: 14,
+  },
+  jumpActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  jumpButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 6,
+    alignItems: 'center',
+    marginHorizontal: 4,
+  },
+  cancelButton: {
+    backgroundColor: '#777777',
+  },
+  goButton: {
+    backgroundColor: '#007bff',
+  },
+  jumpButtonText: {
+    color: '#ffffff',
+    fontWeight: 'bold',
+  },
 });
