@@ -1,20 +1,15 @@
-package com.teotuyetvoi.drivereader;
+package com.teotuyetvoi.drivereader
 
-import com.facebook.react.*;
-importanager.ViewManager;import com.facebook.react.bridge.*;
+import com.facebook.react.*
+import com.facebook.react.bridge.*
+import com.facebook.react.uimanager.ViewManager
 
-import java.util.*;
-
-public class HardwareKeyPackage implements ReactPackage {
-    @Override
-    public List<NativeModule> createNativeModules(ReactApplicationContext context) {
-        List<NativeModule> modules = new ArrayList<>();
-        modules.add(new HardwareKeyModule(context));
-        return modules;
+class HardwareKeyPackage : ReactPackage {
+    override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
+        return listOf(HardwareKeyModule(reactContext))
     }
 
-    @Override
-    public List<ViewManager> createViewManagers(ReactApplicationContext context) {
-        return Collections.emptyList();
+    override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {
+        return emptyList()
     }
 }

@@ -1,72 +1,49 @@
-package com.teotuyetvoi.drivereader;package com.teotuyReactNativeHost;
-  }
+package com.teotuyetvoi.drivereader
 
-  @Override
-  public void onCreate() {
-    super.onCreate();
-    SoLoader.init(this, /* native exopackage */ false);
+import android.app.Application
+import com.facebook.react.*
+import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
+import com.facebook.react.defaults.DefaultReactNativeHost
+import com.facebook.soloader.SoLoader
 
-    if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
-      DefaultNewArchitectureEntryPoint.load();
+class MainApplication : Application(), ReactApplication {
+
+    private val reactNativeHost: ReactNativeHost =
+        object : DefaultReactNativeHost(this) {
+
+            override fun getUseDeveloperSupport(): Boolean {
+                return BuildConfig.DEBUG
+            }
+
+            override fun getPackages(): List<ReactPackage> {
+                val packages = PackageList(this).packages
+                packages.add(HardwareKeyPackage())
+                return packages
+            }
+
+            override fun getJSMainModuleName(): String {
+                return "index"
+            }
+
+            override fun isNewArchEnabled(): Boolean {
+                return BuildConfig.IS_NEW_ARCHITECTURE_ENABLED
+            }
+
+            override fun isHermesEnabled(): Boolean {
+                return BuildConfig.IS_HERMES_ENABLED
+            }
+        }
+
+    override fun getReactNativeHost(): ReactNativeHost {
+        return reactNativeHost
     }
-  }
 
-  @Override
-  public void onConfigurationChanged(Configuration newConfig) {
-    super.onConfigurationChanged(newConfig);
-  }
+    override fun onCreate() {
+        super.onCreate()
+        SoLoader.init(this, false)
+
+        if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
+            DefaultNewArchitectureEntryPoint.load()
+        }
+    }
 }
-
-
-import android.app.Application;
-import android.content.res.Configuration;
-
-import com.facebook.react.PackageList;
-import com.facebook.react.ReactApplication;
-import com.facebook.react.ReactNativeHost;
-import com.facebook.react.ReactPackage;
-import com.facebook.react.ReactHost;
-import com.facebook.react.defaults.DefaultReactNativeHost;
-import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint;
-import com.facebook.soloader.SoLoader;
-
-import java.util.List;
-
-public class MainApplication extends Application implements ReactApplication {
-
-  private final ReactNativeHost mReactNativeHost =
-      new DefaultReactNativeHost(this) {
-
-        @Override
-        public boolean getUseDeveloperSupport() {
-          return BuildConfig.DEBUG;
-        }
-
-        @Override
-        protected List<ReactPackage> getPackages() {
-          List<ReactPackage> packages = new PackageList(this).getPackages();
-
-          // ✅ THÊM NATIVE MODULE Ở ĐÂY
-          packages.add(new HardwareKeyPackage());
-
-          return packages;
-        }
-
-        @Override
-        protected String getJSMainModuleName() {
-          return "index";
-        }
-
-        @Override
-        protected boolean isNewArchEnabled() {
-          return BuildConfig.IS_NEW_ARCHITECTURE_ENABLED;
-        }
-
-        @Override
-        protected Boolean isHermesEnabled() {
-          return BuildConfig.IS_HERMES_ENABLED;
-        }
-      };
-
-  @Override
-  public ReactNativeHost getReactNativeHost() {

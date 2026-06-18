@@ -1,38 +1,38 @@
-package com.teotuyetvoi.drivereader;
+package com.teotuyetvoi.drivereader
 
-import androidx.annotation.NonNull;
+import com.facebook.react.bridge.*
+import com.facebook.react.modules.core.DeviceEventManagerModule
 
-import com.facebook.react.bridge.*;
-import com.facebook.react.modules.core.DeviceEventManagerModule;
+class HardwareKeyModule(private val reactContext: ReactApplicationContext) :
+    ReactContextBaseJavaModule(reactContext) {
 
-public class HardwareKeyModule extends ReactContextBaseJavaModule {
-    private static ReactApplicationContext reactContext;
-
-    public HardwareKeyModule(ReactApplicationContext context) {
-        super(context);
-        reactContext = context;
+    override fun getName(): String {
+        return "HardwareKeyModule"
     }
 
-    @NonNull
-    @Override
-    public String getName() {
-        return "HardwareKeyModule";
+    companion object {
+        private var instance: HardwareKeyModule? = null
+
+        fun setInstance(module: HardwareKeyModule) {
+            instance = module
+        }
+
+        fun sendKeyEvent(keyCode: Int) {
+            instance?.reactContext
+                ?.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                ?.emit("HardwareKeyPress", Arguments.createMap().apply {
+                    putInt("keyCode", keyCode)
+                })
+        }
     }
 
-    public static void sendKeyEvent(int keyCode) {
-        if (reactContext == null) return;
-
-        WritableMap map = Arguments.createMap();
-        map.putInt("keyCode", keyCode);
-
-        reactContext
-            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
-            .emit("HardwareKeyPress", map);
+    init {
+        setInstance(this)
     }
 
     @ReactMethod
-    public void addListener(String eventName) {}
+    fun addListener(eventName: String) {}
 
     @ReactMethod
-    public void removeListeners(Integer count) {}
+    fun removeListeners(count: Int) {}
 }
