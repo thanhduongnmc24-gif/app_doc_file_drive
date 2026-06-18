@@ -3,9 +3,7 @@ import {
   ActivityIndicator,
   BackHandler,
   FlatList,
-  Keyboard,
   Modal,
-  Platform,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -26,6 +24,7 @@ const MIME_TEXT = 'text/plain';
 const CHAPTER_GROUP_SIZE = 50;
 const READER_SCROLL_LINES = 5;
 const BOTTOM_THRESHOLD = 28;
+const KEY_THROTTLE_MS = 120;
 
 const SCREEN_LIBRARY = 'LIBRARY';
 const SCREEN_TOC_GROUPS = 'TOC_GROUPS';
@@ -67,8 +66,16 @@ export default function App() {
   const scrollContentHeight = useRef(0);
   const scrollLayoutHeight = useRef(0);
 
+  const libraryListRef = useRef(null);
+  const groupListRef = useRef(null);
+  const chapterListRef = useRef(null);
+
   const hiddenInputRef = useRef(null);
-  const keyboardBlockTimerRef = useRef(null);
+  const focusTimerRef = useRef(null);
+  const keyThrottleRef = useRef({
+    key: '',
+    time: 0,
+  });
 
   const contentCacheRef = useRef({});
   const prefetchingRef = useRef({});
@@ -76,24 +83,11 @@ export default function App() {
   const focusHiddenInput = () => {
     if (showJumpModal) return;
 
-    hiddenInputRef.current?.focus();
-
-    setTimeout(() => {
-      Keyboard.dismiss();
-    }, 30);
-  };
-
-  const hardDismissKeyboard = () => {
-    if (showJumpModal) return;
-
-    Keyboard.dismiss();
-
-    if (keyboardBlockTimerRef.current) {
-      clearTimeout(keyboardBlockTimerRef.current);
+    if (focusTimerRef.current) {
+      clearTimeout(focusTimerRef.current);
     }
 
-    keyboardBlockTimerRef.current = setTimeout(() => {
-      Keyboard.dismiss();
+    focusTimerRef.current = setTimeout(() => {
       hiddenInputRef.current?.focus();
     }, 80);
   };
@@ -102,8 +96,8 @@ export default function App() {
     loadInitialSettings();
 
     return () => {
-      if (keyboardBlockTimerRef.current) {
-        clearTimeout(keyboardBlockTimerRef.current);
+      if (focusTimerRef.current) {
+        clearTimeout(focusTimerRef.current);
       }
     };
   }, []);
@@ -111,11 +105,7 @@ export default function App() {
   useEffect(() => {
     if (showJumpModal) return;
 
-    const timer = setTimeout(() => {
-      focusHiddenInput();
-    }, 250);
-
-    return () => clearTimeout(timer);
+    focusHiddenInput();
   }, [
     screen,
     loading,
@@ -126,22 +116,6 @@ export default function App() {
     currentChapterIndex,
     showJumpModal,
   ]);
-
-  useEffect(() => {
-    const showSub = Keyboard.addListener('keyboardDidShow', () => {
-      if (!showJumpModal) {
-        Keyboard.dismiss();
-
-        setTimeout(() => {
-          hiddenInputRef.current?.focus();
-        }, 80);
-      }
-    });
-
-    return () => {
-      showSub.remove();
-    };
-  }, [showJumpModal]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -158,7 +132,60 @@ export default function App() {
     currentChapterIndex,
     selectedGroupIndex,
     showJumpModal,
+    localTree,
   ]);
+
+  useEffect(() => {
+    if (screen === SCREEN_LIBRARY) {
+      safeScrollToIndex(libraryListRef, selectedIndex);
+    }
+  }, [screen, selectedIndex, currentItems.length]);
+
+  useEffect(() => {
+    if (screen === SCREEN_TOC_GROUPS) {
+      safeScrollToIndex(groupListRef, selectedIndex);
+    }
+  }, [screen, selectedIndex, chapters.length]);
+
+  useEffect(() => {
+    if (screen === SCREEN_TOC_CHAPTERS) {
+      const start = getGroupStartIndex(selectedGroupIndex);
+      const positionInGroup = selectedChapterIndex - start;
+      safeScrollToIndex(chapterListRef, positionInGroup);
+    }
+  }, [screen, selectedChapterIndex, selectedGroupIndex, chapters.length]);
+
+  const safeScrollToIndex = (listRef, index) => {
+    if (!listRef?.current || index < 0) return;
+
+    requestAnimationFrame(() => {
+      try {
+        listRef.current.scrollToIndex({
+          index,
+          animated: true,
+          viewPosition: 0.45,
+        });
+      } catch (e) {
+        // FlatList đôi khi chưa đo xong item. Bỏ qua để tránh crash.
+      }
+    });
+  };
+
+  const shouldHandleKey = (key) => {
+    const now = Date.now();
+    const last = keyThrottleRef.current;
+
+    if (last.key === key && now - last.time < KEY_THROTTLE_MS) {
+      return false;
+    }
+
+    keyThrottleRef.current = {
+      key,
+      time: now,
+    };
+
+    return true;
+  };
 
   const fetchContents = async (fId, key, foldersOnly = false) => {
     let allItems = [];
@@ -485,6 +512,8 @@ export default function App() {
     if (!file) return;
 
     scrollY.current = 0;
+    scrollContentHeight.current = 0;
+    scrollLayoutHeight.current = 0;
     scrollViewRef.current?.scrollTo({ y: 0, animated: false });
 
     const cached = contentCacheRef.current[file.id];
@@ -536,7 +565,10 @@ export default function App() {
     if (typeof cached === 'string') {
       setLoadingContent(false);
       setTextContent(cached);
+
       scrollY.current = 0;
+      scrollContentHeight.current = 0;
+      scrollLayoutHeight.current = 0;
       scrollViewRef.current?.scrollTo({ y: 0, animated: false });
 
       if (currentBook) {
@@ -800,9 +832,11 @@ export default function App() {
   };
 
   const handleKeyPress = (e) => {
-    const key = e.nativeEvent.key;
+    const key = e.nativeEvent.key || '';
 
-    hardDismissKeyboard();
+    if (!shouldHandleKey(key)) {
+      return;
+    }
 
     if (key === '2' || key === 'ArrowUp' || key === 'DPadUp') {
       moveSelection(-1);
@@ -876,17 +910,18 @@ export default function App() {
         autoCorrect={false}
         autoCapitalize="none"
         spellCheck={false}
-        keyboardType={Platform.OS === 'android' ? 'visible-password' : 'default'}
+        keyboardType="default"
         importantForAutofill="no"
         blurOnSubmit={false}
         inputMode="none"
-        onFocus={hardDismissKeyboard}
-        onPressIn={hardDismissKeyboard}
         onKeyPress={handleKeyPress}
-        value=""
-        onChangeText={() => {
-          hardDismissKeyboard();
+        onBlur={() => {
+          if (!showJumpModal) {
+            focusHiddenInput();
+          }
         }}
+        value=""
+        onChangeText={() => {}}
       />
     );
   };
@@ -914,6 +949,7 @@ export default function App() {
         <LibraryScreen
           title={currentFolderName}
           items={currentItems}
+          listRef={libraryListRef}
           selectedIndex={selectedIndex}
           onPressItem={(item, index) => {
             setSelectedIndex(index);
@@ -928,6 +964,7 @@ export default function App() {
         <TocGroupsScreen
           bookName={currentBook?.name || 'Mục lục'}
           groupCount={getGroupCount()}
+          listRef={groupListRef}
           selectedIndex={selectedIndex}
           getGroupStartIndex={getGroupStartIndex}
           getGroupEndIndex={getGroupEndIndex}
@@ -955,6 +992,7 @@ export default function App() {
         <TocChaptersScreen
           bookName={currentBook?.name || 'Mục lục'}
           chapters={chapters}
+          listRef={chapterListRef}
           selectedGroupIndex={selectedGroupIndex}
           selectedChapterIndex={selectedChapterIndex}
           getGroupStartIndex={getGroupStartIndex}
@@ -1002,7 +1040,7 @@ export default function App() {
   );
 }
 
-function LibraryScreen({ title, items, selectedIndex, onPressItem, onRefresh, onBack }) {
+function LibraryScreen({ title, items, listRef, selectedIndex, onPressItem, onRefresh, onBack }) {
   return (
     <View style={styles.screen}>
       <View style={styles.headerBar}>
@@ -1020,9 +1058,21 @@ function LibraryScreen({ title, items, selectedIndex, onPressItem, onRefresh, on
       </View>
 
       <FlatList
+        ref={listRef}
         data={items}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
+        initialNumToRender={20}
+        maxToRenderPerBatch={20}
+        windowSize={7}
+        onScrollToIndexFailed={(info) => {
+          setTimeout(() => {
+            listRef.current?.scrollToOffset({
+              offset: Math.max(0, info.averageItemLength * info.index),
+              animated: true,
+            });
+          }, 80);
+        }}
         ListEmptyComponent={
           <Text style={styles.emptyText}>Mục này trống hoặc không có folder/truyện .txt</Text>
         }
@@ -1050,6 +1100,7 @@ function LibraryScreen({ title, items, selectedIndex, onPressItem, onRefresh, on
 function TocGroupsScreen({
   bookName,
   groupCount,
+  listRef,
   selectedIndex,
   getGroupStartIndex,
   getGroupEndIndex,
@@ -1076,9 +1127,21 @@ function TocGroupsScreen({
       </View>
 
       <FlatList
+        ref={listRef}
         data={groups}
         keyExtractor={(item) => String(item)}
         contentContainerStyle={styles.listContent}
+        initialNumToRender={20}
+        maxToRenderPerBatch={20}
+        windowSize={7}
+        onScrollToIndexFailed={(info) => {
+          setTimeout(() => {
+            listRef.current?.scrollToOffset({
+              offset: Math.max(0, info.averageItemLength * info.index),
+              animated: true,
+            });
+          }, 80);
+        }}
         ListEmptyComponent={<Text style={styles.emptyText}>Không có chương .txt</Text>}
         renderItem={({ item }) => {
           const start = getGroupStartIndex(item) + 1;
@@ -1106,6 +1169,7 @@ function TocGroupsScreen({
 function TocChaptersScreen({
   bookName,
   chapters,
+  listRef,
   selectedGroupIndex,
   selectedChapterIndex,
   getGroupStartIndex,
@@ -1130,9 +1194,21 @@ function TocChaptersScreen({
       </View>
 
       <FlatList
+        ref={listRef}
         data={groupChapters}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
+        initialNumToRender={20}
+        maxToRenderPerBatch={20}
+        windowSize={7}
+        onScrollToIndexFailed={(info) => {
+          setTimeout(() => {
+            listRef.current?.scrollToOffset({
+              offset: Math.max(0, info.averageItemLength * info.index),
+              animated: true,
+            });
+          }, 80);
+        }}
         renderItem={({ item, index }) => {
           const globalIndex = start + index;
           const active = globalIndex === selectedChapterIndex;
@@ -1261,8 +1337,8 @@ const styles = StyleSheet.create({
     width: 1,
     height: 1,
     opacity: 0,
-    top: -10,
-    left: -10,
+    top: -20,
+    left: -20,
     zIndex: -1,
   },
   center: {
