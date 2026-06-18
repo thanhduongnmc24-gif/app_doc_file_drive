@@ -25,6 +25,7 @@ const MIME_TEXT = 'text/plain';
 
 const CHAPTER_GROUP_SIZE = 50;
 const READER_SCROLL_LINES = 5;
+const BOTTOM_THRESHOLD = 28;
 
 const SCREEN_LIBRARY = 'LIBRARY';
 const SCREEN_TOC_GROUPS = 'TOC_GROUPS';
@@ -63,6 +64,9 @@ export default function App() {
 
   const scrollViewRef = useRef(null);
   const scrollY = useRef(0);
+  const scrollContentHeight = useRef(0);
+  const scrollLayoutHeight = useRef(0);
+
   const hiddenInputRef = useRef(null);
   const keyboardBlockTimerRef = useRef(null);
 
@@ -611,6 +615,18 @@ export default function App() {
     return Math.min(rawEnd, chapters.length - 1);
   };
 
+  const isReaderAtBottom = () => {
+    const currentY = scrollY.current || 0;
+    const contentHeight = scrollContentHeight.current || 0;
+    const layoutHeight = scrollLayoutHeight.current || 0;
+
+    if (contentHeight <= 0 || layoutHeight <= 0) {
+      return false;
+    }
+
+    return currentY + layoutHeight >= contentHeight - BOTTOM_THRESHOLD;
+  };
+
   const openSelected = () => {
     if (screen === SCREEN_LIBRARY) {
       const item = currentItems[selectedIndex];
@@ -681,6 +697,13 @@ export default function App() {
     }
 
     if (screen === SCREEN_READER) {
+      if (delta > 0 && isReaderAtBottom()) {
+        if (currentChapterIndex < chapters.length - 1) {
+          nextChapter();
+        }
+        return;
+      }
+
       const lineHeight = fontSize * 1.6;
       const amount = lineHeight * READER_SCROLL_LINES;
       const nextOffset = Math.max(0, scrollY.current + amount * delta);
@@ -952,6 +975,12 @@ export default function App() {
           scrollViewRef={scrollViewRef}
           handleScroll={handleScroll}
           footerVisible={readerFooterVisible}
+          onContentSizeChange={(width, height) => {
+            scrollContentHeight.current = height;
+          }}
+          onLayout={(event) => {
+            scrollLayoutHeight.current = event.nativeEvent.layout.height;
+          }}
         />
       )}
 
@@ -1134,6 +1163,8 @@ function ReaderScreen({
   scrollViewRef,
   handleScroll,
   footerVisible,
+  onContentSizeChange,
+  onLayout,
 }) {
   return (
     <View style={styles.screen}>
@@ -1146,6 +1177,8 @@ function ReaderScreen({
             style={styles.textContainer}
             onScroll={handleScroll}
             scrollEventThrottle={16}
+            onContentSizeChange={onContentSizeChange}
+            onLayout={onLayout}
           >
             <Text
               style={[
@@ -1163,7 +1196,7 @@ function ReaderScreen({
       </View>
 
       {footerVisible ? (
-        <Footer text="1/3 chương · 2/8 cuộn · 4/6 font · 5 ML · 7 nhảy · 9 ẩn · 0 lại" />
+        <Footer text="1/3 chương · 2/8 cuộn · cuối+8 sang chương · 4/6 font · 7 nhảy · 9 ẩn · 0 lại" />
       ) : (
         <View style={styles.footerHidden} />
       )}
