@@ -1,14 +1,16 @@
 package com.teotuyetvoi.drivereader
 
 import android.app.Application
-import com.facebook.react.*
-import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
+import com.facebook.react.ReactApplication
+import com.facebook.react.ReactNativeHost
+import com.facebook.react.ReactPackage
+import com.facebook.react.PackageList
 import com.facebook.react.defaults.DefaultReactNativeHost
 import com.facebook.soloader.SoLoader
 
 class MainApplication : Application(), ReactApplication {
 
-    private val reactNativeHost: ReactNativeHost =
+    private val mReactNativeHost: ReactNativeHost =
         object : DefaultReactNativeHost(this) {
 
             override fun getUseDeveloperSupport(): Boolean {
@@ -17,33 +19,21 @@ class MainApplication : Application(), ReactApplication {
 
             override fun getPackages(): List<ReactPackage> {
                 val packages = PackageList(this).packages
-                packages.add(HardwareKeyPackage())
+                packages.add(HardwareKeyPackage()) // 👈 QUAN TRỌNG
                 return packages
             }
 
             override fun getJSMainModuleName(): String {
                 return "index"
             }
-
-            override fun isNewArchEnabled(): Boolean {
-                return BuildConfig.IS_NEW_ARCHITECTURE_ENABLED
-            }
-
-            override fun isHermesEnabled(): Boolean {
-                return BuildConfig.IS_HERMES_ENABLED
-            }
         }
 
     override fun getReactNativeHost(): ReactNativeHost {
-        return reactNativeHost
+        return mReactNativeHost
     }
 
     override fun onCreate() {
         super.onCreate()
         SoLoader.init(this, false)
-
-        if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
-            DefaultNewArchitectureEntryPoint.load()
-        }
     }
 }

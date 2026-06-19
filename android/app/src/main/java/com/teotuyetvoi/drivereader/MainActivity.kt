@@ -1,6 +1,5 @@
 package com.teotuyetvoi.drivereader
 
-import android.os.Bundle
 import android.view.KeyEvent
 import com.facebook.react.ReactActivity
 
@@ -11,7 +10,7 @@ class MainActivity : ReactActivity() {
     }
 
     private fun isOurKey(keyCode: Int): Boolean {
-        return (keyCode in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) ||
+        return keyCode in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 ||
                 keyCode == KeyEvent.KEYCODE_DPAD_UP ||
                 keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
                 keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||

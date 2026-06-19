@@ -6,9 +6,7 @@ import com.facebook.react.modules.core.DeviceEventManagerModule
 class HardwareKeyModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
-    override fun getName(): String {
-        return "HardwareKeyModule"
-    }
+    override fun getName(): String = "HardwareKeyModule"
 
     companion object {
         private var instance: HardwareKeyModule? = null
